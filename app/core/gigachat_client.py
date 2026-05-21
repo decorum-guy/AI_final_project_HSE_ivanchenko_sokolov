@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 ALLOWED_TAG_RE = re.compile(r"</?(?:b|i|blockquote)>|<a\s+href=\"[^\"]+\">|</a>", re.IGNORECASE)
 MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)]\((https?://[^)\s]+)\)")
+SLOGAN_PLACEHOLDERS = (
+    "Короткий слоган дайджеста одной строкой.",
+    "Короткий слоган дайджеста в одну строку.",
+)
 
 
 def _extract_answer(response: Any) -> str:
@@ -114,6 +118,28 @@ def postprocess_digest_html(text: str) -> str:
     return text
 
 
+def repair_digest_text(text: str) -> str:
+    for placeholder in SLOGAN_PLACEHOLDERS:
+        text = text.replace(placeholder, _fallback_slogan_from_text(text))
+    return text
+
+
+def _has_slogan_placeholder(text: str) -> bool:
+    return any(placeholder in text for placeholder in SLOGAN_PLACEHOLDERS)
+
+
+def _fallback_slogan_from_text(text: str) -> str:
+    plain = re.sub(r"<[^>]+>", " ", text)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    if "спорт" in plain.lower() and ("игр" in plain.lower() or "технолог" in plain.lower()):
+        return "Спорт, игры и технологии задают темп сегодняшней повестке."
+    if "технолог" in plain.lower() or "github" in plain.lower() or "amd" in plain.lower():
+        return "Технологическая повестка сегодня держит высокий темп."
+    if "игр" in plain.lower() or "steam" in plain.lower():
+        return "Игровая индустрия снова подбрасывает громкие поводы."
+    return "Главные события дня — коротко, по делу и без лишнего шума."
+
+
 def _has_early_summary(text: str) -> bool:
     news_index = text.lower().find("<b>новости</b>")
     summary_index = text.lower().find("<b>итог</b>")
@@ -151,7 +177,11 @@ class GigaChatDigestClient:
         logger.info("Sending digest prompt to GigaChat: items=%s chars=%s", len(items), len(prompt))
         try:
             answer = await ask_gigachat(prompt, max_tokens=2600, temperature=0.15)
-            return postprocess_digest_html(answer)
+            text = postprocess_digest_html(answer)
+            if _has_slogan_placeholder(text):
+                logger.warning("GigaChat copied digest slogan placeholder; regenerating slogan")
+                text = await self._replace_placeholder_slogan(text)
+            return repair_digest_text(text)
         except Exception as exc:
             logger.exception("GigaChat digest request failed, using fallback: %s", exc)
             return self._fallback_digest(items, period_title)
@@ -183,12 +213,13 @@ class GigaChatDigestClient:
             "14. Символы <, >, & в обычном тексте не используй вне разрешенных HTML-тегов.",
             "",
             "Строгий шаблон ответа:",
+            "Важно: не копируй текст в фигурных скобках и не копируй пояснения шаблона. Вместо них напиши реальный текст.",
             f"<b>📰 Дайджест {period_title}</b>",
             "",
-            "<blockquote>2–3 предложения: главная суть дайджеста.</blockquote>",
+            "<blockquote>{напиши 2 коротких предложения с главной сутью дайджеста}</blockquote>",
             "",
             "Слоган дайджеста:",
-            "<i>Короткий слоган дайджеста одной строкой.</i>",
+            "<i>{придумай конкретный короткий слоган по темам новостей, не больше 80 символов}</i>",
             "",
             "<b>Новости</b>",
             "",
@@ -218,6 +249,25 @@ class GigaChatDigestClient:
                 ]
             )
         return "\n".join(lines)
+
+    async def _replace_placeholder_slogan(self, digest_text: str) -> str:
+        prompt = (
+            "Придумай один короткий слоган на русском языке для этого новостного дайджеста.\n"
+            "Правила: одна строка, до 80 символов, без кавычек, без Markdown, без HTML, без пояснений.\n\n"
+            f"Дайджест:\n{digest_text[:3500]}"
+        )
+        try:
+            slogan = await ask_gigachat(prompt, max_tokens=120, temperature=0.4)
+            slogan = re.sub(r"<[^>]+>", "", slogan).strip().strip('"').strip("'")
+            slogan = re.sub(r"\s+", " ", slogan)
+            if not slogan or len(slogan) > 120:
+                slogan = _fallback_slogan_from_text(digest_text)
+        except Exception:
+            slogan = _fallback_slogan_from_text(digest_text)
+
+        for placeholder in SLOGAN_PLACEHOLDERS:
+            digest_text = digest_text.replace(placeholder, escape(slogan))
+        return digest_text
 
     async def shorten(self, digest_text: str) -> str:
         prompt = (

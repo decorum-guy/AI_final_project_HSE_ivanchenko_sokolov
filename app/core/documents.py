@@ -7,6 +7,7 @@ from io import BytesIO
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
+from app.core.gigachat_client import repair_digest_text
 from app.db.models import DigestHistory
 
 
@@ -21,58 +22,100 @@ def _plain_text_from_html(html: str) -> str:
     return unescape(text).strip()
 
 
+def _period_title(period: str) -> str:
+    return {
+        "today": "за сегодня",
+        "3days": "за последние 3 дня",
+        "week": "за неделю",
+    }.get(period, period)
+
+
+def _mode_title(source_mode: str) -> str:
+    return {
+        "interests": "по интересам",
+        "selected_sources": "по выбранным источникам",
+    }.get(source_mode, source_mode)
+
+
 def _document_title(digest: DigestHistory) -> str:
     created = digest.created_at.strftime("%d.%m.%Y %H:%M") if isinstance(digest.created_at, datetime) else ""
-    return f"ИнфоПульс: дайджест {digest.period} от {created}".strip()
+    return f"ИнфоПульс: дайджест {_period_title(digest.period)} от {created}".strip()
 
 
 def build_digest_docx(digest: DigestHistory) -> bytes:
     from docx import Document
-    from docx.enum.text import WD_BREAK
-    from docx.shared import RGBColor
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
 
     document = Document()
     document.add_heading(_document_title(digest), level=1)
-    document.add_paragraph(f"Период: {digest.period}")
-    document.add_paragraph(f"Режим: {digest.source_mode}")
+    document.add_paragraph(f"Период: {_period_title(digest.period)}")
+    document.add_paragraph(f"Режим: {_mode_title(digest.source_mode)}")
     document.add_paragraph("")
 
-    soup = BeautifulSoup(digest.digest_text, "html.parser")
+    def add_hyperlink(paragraph, text: str, url: str) -> None:
+        relationship_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
+        hyperlink = OxmlElement("w:hyperlink")
+        hyperlink.set(qn("r:id"), relationship_id)
 
-    def add_node(paragraph, node) -> None:
+        run = OxmlElement("w:r")
+        run_properties = OxmlElement("w:rPr")
+
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "0563C1")
+        run_properties.append(color)
+
+        underline = OxmlElement("w:u")
+        underline.set(qn("w:val"), "single")
+        run_properties.append(underline)
+
+        run.append(run_properties)
+        text_element = OxmlElement("w:t")
+        text_element.text = text
+        run.append(text_element)
+        hyperlink.append(run)
+        paragraph._p.append(hyperlink)
+
+    def add_inline(paragraph, node, *, bold: bool = False, italic: bool = False) -> None:
         if isinstance(node, NavigableString):
-            paragraph.add_run(str(node))
+            if str(node):
+                text_run = paragraph.add_run(str(node))
+                text_run.bold = bold
+                text_run.italic = italic
             return
         if not isinstance(node, Tag):
-            return
-
-        if node.name == "br":
-            paragraph.add_run().add_break(WD_BREAK.LINE)
             return
 
         if node.name == "a":
             href = node.get("href", "")
             text = node.get_text(strip=True) or href
-            run = paragraph.add_run(text)
-            run.font.color.rgb = RGBColor(5, 99, 193)
-            run.underline = True
             if href:
-                paragraph.add_run(f" ({href})")
+                add_hyperlink(paragraph, text, href)
+            else:
+                paragraph.add_run(text)
             return
 
-        run = paragraph.add_run()
-        if node.name == "b":
-            run.bold = True
-        elif node.name == "i":
-            run.italic = True
-        run.text = node.get_text()
+        next_bold = bold or node.name == "b"
+        next_italic = italic or node.name == "i"
+        for child in node.children:
+            add_inline(paragraph, child, bold=next_bold, italic=next_italic)
 
-    for child in soup.children:
-        if isinstance(child, NavigableString) and not str(child).strip():
-            continue
-        style = "Intense Quote" if isinstance(child, Tag) and child.name == "blockquote" else None
+    def add_html_line(line: str, style=None) -> None:
         paragraph = document.add_paragraph(style=style)
-        add_node(paragraph, child)
+        line_soup = BeautifulSoup(line, "html.parser")
+        for node in line_soup.contents:
+            add_inline(paragraph, node)
+
+    html = repair_digest_text(digest.digest_text)
+    html = html.replace("<blockquote>", "\n<blockquote>").replace("</blockquote>", "</blockquote>\n")
+    for raw_line in html.splitlines():
+        line = raw_line.strip()
+        if not line:
+            document.add_paragraph("")
+            continue
+        style = "Intense Quote" if line.lower().startswith("<blockquote>") else None
+        add_html_line(line, style=style)
 
     stream = BytesIO()
     document.save(stream)
@@ -114,12 +157,19 @@ def build_digest_pdf(digest: DigestHistory) -> bytes:
         backColor=colors.whitesmoke,
     )
 
-    doc = SimpleDocTemplate(stream, pagesize=A4, rightMargin=1.5 * cm, leftMargin=1.5 * cm, topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+    doc = SimpleDocTemplate(
+        stream,
+        pagesize=A4,
+        rightMargin=1.5 * cm,
+        leftMargin=1.5 * cm,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm,
+    )
     story = [Paragraph(_document_title(digest), title), Spacer(1, 8)]
-    story.append(Paragraph(f"Период: {digest.period}<br/>Режим: {digest.source_mode}", normal))
+    story.append(Paragraph(f"Период: {_period_title(digest.period)}<br/>Режим: {_mode_title(digest.source_mode)}", normal))
     story.append(Spacer(1, 12))
 
-    soup = BeautifulSoup(digest.digest_text, "html.parser")
+    soup = BeautifulSoup(repair_digest_text(digest.digest_text), "html.parser")
 
     def add_pdf_text(text: str, style=normal) -> None:
         for line in text.splitlines():

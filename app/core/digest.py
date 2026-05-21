@@ -8,7 +8,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.gigachat_client import GigaChatDigestClient
+from app.core.gigachat_client import GigaChatDigestClient, repair_digest_text
 from app.core.recommender import filter_by_interests, relevance_score
 from app.core.rss import PERIOD_TITLES, NewsItem, fetch_news
 from app.db import queries
@@ -144,6 +144,11 @@ async def build_digest(
     if not force_new:
         cached = await queries.cached_digest(session, user.id, period, source_mode)
         if cached:
+            repaired = repair_digest_text(cached.digest_text)
+            if repaired != cached.digest_text:
+                cached.digest_text = repaired
+                await session.commit()
+                await session.refresh(cached)
             return cached
 
     prepared = await prepare_digest_input(session, user, source_mode, period, progress_callback=progress_callback)
