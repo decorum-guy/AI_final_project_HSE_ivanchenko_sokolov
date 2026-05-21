@@ -95,10 +95,13 @@ class GigaChatDigestClient:
             "6. Не используй Markdown: никаких **жирных**, [текст](url) и # заголовков.",
             "7. Символы <, >, & в обычном тексте экранируй или не используй вне HTML-тегов.",
             "8. Ответ должен быть готов к отправке в Telegram с parse_mode='HTML'.",
+            "9. После вводного блока обязательно добавь короткий слоган дайджеста: одну яркую строку без тега blockquote.",
+            "10. Слоган должен идти сразу после краткого описания и перед первой новостью.",
             "",
             "Структура ответа:",
             f"<b>📰 Дайджест {period_title}</b>",
             "<blockquote>Коротко: 2–3 главные темы дайджеста одним абзацем.</blockquote>",
+            "<i>Короткий слоган дайджеста в одну строку.</i>",
             "",
             "<b>1. Заголовок новости</b>",
             "Кратко: 1–2 предложения по сути новости.",
@@ -127,11 +130,17 @@ class GigaChatDigestClient:
 
     def _fallback_digest(self, items: list[NewsItem], period_title: str) -> str:
         if not items:
-            return f"<b>📰 Дайджест {escape(period_title)}</b>\n\n<blockquote>Подходящих новостей пока не найдено.</blockquote>"
+            return (
+                f"<b>📰 Дайджест {escape(period_title)}</b>\n\n"
+                "<blockquote>Подходящих новостей пока не найдено.</blockquote>\n"
+                "<i>Сегодня новостная пауза — тоже часть повестки.</i>"
+            )
+        slogan = self._fallback_slogan(items)
         lines = [
             f"<b>📰 Дайджест {escape(period_title)}</b>",
             "",
             "<blockquote>Коротко: собрал свежие новости из выбранных RSS-источников.</blockquote>",
+            f"<i>{escape(slogan)}</i>",
             "",
         ]
         for index, item in enumerate(items[:12], start=1):
@@ -156,3 +165,16 @@ class GigaChatDigestClient:
         lines.append("<b>Итог</b>")
         lines.append("<blockquote>Это резервная версия дайджеста из RSS-заголовков, потому что GigaChat сейчас недоступен.</blockquote>")
         return "\n".join(lines)
+
+    def _fallback_slogan(self, items: list[NewsItem]) -> str:
+        categories = []
+        for item in items:
+            if item.category and item.category not in categories:
+                categories.append(item.category)
+            if len(categories) >= 2:
+                break
+        if len(categories) >= 2:
+            return f"{categories[0]} и {categories[1]} задают тон сегодняшней повестке."
+        if categories:
+            return f"{categories[0]} сегодня в центре внимания."
+        return "Главные новости коротко: от сигналов рынка до технологических сдвигов."
