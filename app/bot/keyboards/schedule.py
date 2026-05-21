@@ -6,12 +6,12 @@ from app.core.timezones import TIMEZONES
 
 def schedule_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Каждое утро", callback_data="schedule:type:morning")
-    kb.button(text="Каждый вечер", callback_data="schedule:type:evening")
-    kb.button(text="Раз в неделю", callback_data="schedule:type:weekly")
-    kb.button(text="Отключить рассылку", callback_data="schedule:disable")
-    kb.button(text="Назад", callback_data="menu")
-    kb.adjust(1)
+    kb.button(text="🌅 Каждое утро", callback_data="schedule:type:morning", style="primary")
+    kb.button(text="🌙 Каждый вечер", callback_data="schedule:type:evening", style="primary")
+    kb.button(text="📅 Раз в неделю", callback_data="schedule:type:weekly")
+    kb.button(text="🔕 Отключить", callback_data="schedule:disable", style="danger")
+    kb.button(text="← Назад", callback_data="menu")
+    kb.adjust(2, 2, 1)
     return kb.as_markup()
 
 
@@ -23,8 +23,8 @@ def schedule_times(schedule_type: str) -> InlineKeyboardMarkup:
     }[schedule_type]
     kb = InlineKeyboardBuilder()
     for time in times:
-        kb.button(text=time, callback_data=f"schedule:time:{schedule_type}:{time}")
-    kb.button(text="Назад", callback_data="schedule:show")
+        kb.button(text=time, callback_data=f"schedule:time:{schedule_type}:{time}", style="primary")
+    kb.button(text="← Назад", callback_data="schedule:show")
     kb.adjust(3, 3, 1)
     return kb.as_markup()
 
@@ -33,7 +33,7 @@ def timezone_menu(return_to: str = "settings") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for title, zone in TIMEZONES:
         kb.button(text=title, callback_data=f"tz:{return_to}:{zone}")
-    kb.button(text="Назад", callback_data="settings:show" if return_to == "settings" else "schedule:show")
-    kb.adjust(1)
+    kb.button(text="← Назад", callback_data="settings:show" if return_to == "settings" else "schedule:show")
+    kb.adjust(2, 2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
