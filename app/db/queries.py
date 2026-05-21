@@ -189,6 +189,16 @@ async def sources_by_category(session: AsyncSession, category: str) -> list[News
     return list(result)
 
 
+async def sources_by_ids(session: AsyncSession, source_ids: list[str]) -> list[NewsSource]:
+    if not source_ids:
+        return []
+    result = await session.scalars(
+        select(NewsSource)
+        .where(NewsSource.source_id.in_(source_ids), NewsSource.is_active.is_(True))
+    )
+    return list(result)
+
+
 async def selected_source_ids(session: AsyncSession, user_id: int) -> set[str]:
     result = await session.scalars(select(UserSource.source_id).where(UserSource.user_id == user_id))
     return set(result)
@@ -322,10 +332,11 @@ async def save_timezone(session: AsyncSession, user: User, timezone: str) -> Non
     await session.commit()
 
 
-async def save_schedule(session: AsyncSession, user: User, schedule_type: str, schedule_time: str) -> None:
+async def save_schedule(session: AsyncSession, user: User, schedule_type: str, schedule_time: str, schedule_day: str | None = None) -> None:
     user.schedule_enabled = True
     user.schedule_type = schedule_type
     user.schedule_time = schedule_time
+    user.schedule_day = schedule_day if schedule_type == "weekly" else None
     await session.commit()
 
 
@@ -333,6 +344,7 @@ async def disable_schedule(session: AsyncSession, user: User) -> None:
     user.schedule_enabled = False
     user.schedule_type = None
     user.schedule_time = None
+    user.schedule_day = None
     await session.commit()
 
 

@@ -266,8 +266,8 @@ async def admin_test_period_selected(callback: CallbackQuery) -> None:
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         digest = await build_digest(session, user, mode, period)
-        text = "🧪 Тестовый дайджест\n\n" + digest.digest_text
+        text = "<b>🧪 Тестовый дайджест</b>\n\n" + digest.digest_text
         keyboard = digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite)
-    edited = await safe_edit_message(loading or callback.message, text, reply_markup=keyboard)
+    edited = await safe_edit_message(loading or callback.message, text, reply_markup=keyboard, parse_mode="HTML")
     if not edited:
-        await callback.message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)
+        await callback.message.answer(text, reply_markup=keyboard, disable_web_page_preview=True, parse_mode="HTML")

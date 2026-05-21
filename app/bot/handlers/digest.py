@@ -81,9 +81,9 @@ async def generate_digest(callback: CallbackQuery) -> None:
         digest = await build_digest(session, user, mode, period, progress_callback=progress)
         keyboard = digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite)
 
-    edited = await safe_edit_message(target_message, digest.digest_text, reply_markup=keyboard)
+    edited = await safe_edit_message(target_message, digest.digest_text, reply_markup=keyboard, parse_mode="HTML")
     if not edited:
-        await callback.message.answer(digest.digest_text, reply_markup=keyboard, disable_web_page_preview=True)
+        await callback.message.answer(digest.digest_text, reply_markup=keyboard, disable_web_page_preview=True, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("fav:fresh:"))
@@ -165,4 +165,5 @@ async def confirm_refresh(callback: CallbackQuery) -> None:
                 new_digest.digest_text,
                 reply_markup=digest_actions(new_digest.id, new_digest.refresh_attempts_left, new_digest.is_favorite),
                 disable_web_page_preview=True,
+                parse_mode="HTML",
             )

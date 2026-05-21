@@ -20,9 +20,20 @@ async def safe_callback_answer(callback: CallbackQuery, text: str | None = None,
         return
 
 
-async def safe_edit_message(message: Message, text: str, reply_markup=None, disable_web_page_preview: bool = True):
+async def safe_edit_message(
+    message: Message,
+    text: str,
+    reply_markup=None,
+    disable_web_page_preview: bool = True,
+    parse_mode: str | None = None,
+):
     try:
-        return await message.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=disable_web_page_preview)
+        return await message.edit_text(
+            text,
+            reply_markup=reply_markup,
+            disable_web_page_preview=disable_web_page_preview,
+            parse_mode=parse_mode,
+        )
     except TelegramBadRequest as exc:
         if "message is not modified" in str(exc):
             return message

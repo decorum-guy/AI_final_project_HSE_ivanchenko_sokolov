@@ -42,7 +42,7 @@ async def view_digest(callback: CallbackQuery, digest_id: int, page: int) -> Non
     if not digest:
         await callback.message.answer("Дайджест не найден.")
         return
-    await safe_edit_message(callback.message, digest.digest_text, reply_markup=history_digest(digest.id, page, digest.is_favorite))
+    await safe_edit_message(callback.message, digest.digest_text, reply_markup=history_digest(digest.id, page, digest.is_favorite), parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("fav:history:"))

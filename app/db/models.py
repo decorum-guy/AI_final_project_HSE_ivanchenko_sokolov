@@ -21,6 +21,7 @@ class User(Base):
     schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     schedule_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     schedule_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    schedule_day: Mapped[str | None] = mapped_column(String(16), nullable=True)
     silent_notifications: Mapped[bool] = mapped_column(Boolean, default=False)
 
     digests: Mapped[list["DigestHistory"]] = relationship(back_populates="user")

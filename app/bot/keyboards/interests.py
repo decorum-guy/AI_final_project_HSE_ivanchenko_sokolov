@@ -14,6 +14,13 @@ def interests_menu() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def interests_edit_back() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button(kb, text="← Назад", callback_data="interests:show")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def interests_after_save() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     button(kb, text="🤖 Подобрать источники", callback_data="interests:recommend", style="success")
@@ -26,10 +33,27 @@ def interests_after_save() -> InlineKeyboardMarkup:
 def recommendations_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     button(kb, text="✅ Добавить все", callback_data="interests:add_recommended", style="success")
+    button(kb, text="⚙️ Изменить подборку", callback_data="interests:review_recommended", style="primary")
     button(kb, text="📡 Выбрать вручную", callback_data="sources:choose:subs", style="primary")
     button(kb, text="🔄 Подобрать заново", callback_data="interests:recommend", style="primary")
     button(kb, text="← Назад", callback_data="interests:show")
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def recommendation_review_menu(items: list[tuple[str, str, bool]]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for source_id, title, is_removed in items:
+        mark = "☐" if is_removed else "✅"
+        button(
+            kb,
+            text=f"{mark} {title}",
+            callback_data=f"interests:toggle_recommended:{source_id}",
+            style=None if is_removed else "success",
+        )
+    button(kb, text="💾 Сохранить", callback_data="interests:save_recommended_review", style="success")
+    button(kb, text="← Назад", callback_data="interests:recommendations_back")
+    kb.adjust(*([1] * len(items)), 1, 1)
     return kb.as_markup()
 
 

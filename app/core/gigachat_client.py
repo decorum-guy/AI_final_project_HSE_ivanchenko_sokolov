@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 from datetime import datetime
 from typing import Any
 
@@ -84,13 +85,28 @@ class GigaChatDigestClient:
             "",
             f"Период: {period_title}.",
             "",
-            "Составь короткий структурированный дайджест на русском языке.",
+            "Сформируй дайджест на русском языке в формате Telegram-compatible HTML.",
             "Правила:",
             "1. Не придумывай факты, используй только переданные новости.",
-            "2. Сгруппируй новости по смыслу, если это уместно.",
-            "3. Для каждой важной новости дай 1-2 предложения и ссылку.",
-            "4. В конце добавь краткий вывод.",
-            "5. Не пиши, что ты языковая модель.",
+            "2. Используй <b>...</b> для заголовков блоков и названий новостей.",
+            "3. Используй <blockquote>...</blockquote> для короткого вводного блока и итога.",
+            "4. Все ссылки оформляй только как <a href=\"URL\">Название источника</a>.",
+            "5. Не выводи голые URL.",
+            "6. Не используй Markdown: никаких **жирных**, [текст](url) и # заголовков.",
+            "7. Символы <, >, & в обычном тексте экранируй или не используй вне HTML-тегов.",
+            "8. Ответ должен быть готов к отправке в Telegram с parse_mode='HTML'.",
+            "",
+            "Структура ответа:",
+            f"<b>📰 Дайджест {period_title}</b>",
+            "<blockquote>Коротко: 2–3 главные темы дайджеста одним абзацем.</blockquote>",
+            "",
+            "<b>1. Заголовок новости</b>",
+            "Кратко: 1–2 предложения по сути новости.",
+            "Почему важно: короткое объяснение значения новости.",
+            "Источник: <a href=\"URL\">Название источника</a>",
+            "",
+            "<b>Итог</b>",
+            "<blockquote>Короткий вывод по общей повестке.</blockquote>",
             "",
             "Новости:",
         ]
@@ -111,12 +127,32 @@ class GigaChatDigestClient:
 
     def _fallback_digest(self, items: list[NewsItem], period_title: str) -> str:
         if not items:
-            return f"📰 Дайджест {period_title}\n\nПодходящих новостей пока не найдено."
-        lines = [f"📰 Дайджест {period_title}", "", "Ключевые новости:"]
+            return f"<b>📰 Дайджест {escape(period_title)}</b>\n\n<blockquote>Подходящих новостей пока не найдено.</blockquote>"
+        lines = [
+            f"<b>📰 Дайджест {escape(period_title)}</b>",
+            "",
+            "<blockquote>Коротко: собрал свежие новости из выбранных RSS-источников.</blockquote>",
+            "",
+        ]
         for index, item in enumerate(items[:12], start=1):
             published = item.published.strftime("%d.%m.%Y") if item.published else "дата не указана"
-            link = f"\n   {item.link}" if item.link else ""
-            lines.append(f"{index}. {item.title} — {item.source}, {published}{link}")
+            source = escape(item.source)
+            title = escape(item.title)
+            summary = escape(item.summary or "Краткое описание в RSS не указано.")
+            if item.link:
+                source_line = f'Источник: <a href="{escape(item.link, quote=True)}">{source}</a>'
+            else:
+                source_line = f"Источник: {source}"
+            lines.extend(
+                [
+                    f"<b>{index}. {title}</b>",
+                    f"Кратко: {summary}",
+                    f"Почему важно: материал относится к выбранной повестке за период, дата: {escape(published)}.",
+                    source_line,
+                    "",
+                ]
+            )
         lines.append("")
-        lines.append("Краткий вывод: это резервная версия дайджеста из RSS-заголовков, потому что GigaChat сейчас недоступен.")
+        lines.append("<b>Итог</b>")
+        lines.append("<blockquote>Это резервная версия дайджеста из RSS-заголовков, потому что GigaChat сейчас недоступен.</blockquote>")
         return "\n".join(lines)

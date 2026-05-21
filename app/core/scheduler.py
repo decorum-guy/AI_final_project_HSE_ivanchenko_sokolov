@@ -49,7 +49,7 @@ async def _add_or_replace_job(telegram_id: int) -> None:
         hour, minute = map(int, user.schedule_time.split(":"))
         trigger_kwargs = {"hour": hour, "minute": minute, "timezone": user.timezone}
         if user.schedule_type == "weekly":
-            trigger_kwargs["day_of_week"] = "mon"
+            trigger_kwargs["day_of_week"] = user.schedule_day or "mon"
         scheduler.add_job(
             send_scheduled_digest,
             CronTrigger(**trigger_kwargs),
@@ -74,6 +74,7 @@ async def send_scheduled_digest(telegram_id: int) -> None:
             reply_markup=digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite),
             disable_notification=silent,
             disable_web_page_preview=True,
+            parse_mode="HTML",
         )
     except Exception:
         logger.exception("Failed to send scheduled digest to %s", telegram_id)

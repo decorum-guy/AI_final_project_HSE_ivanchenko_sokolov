@@ -25,12 +25,12 @@ def history_list(items: list[DigestHistory], page: int, total: int, per_page: in
 
 def history_digest(digest_id: int, page: int, is_favorite: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    button(kb, text="← К истории", callback_data=f"history:{page}")
     button(
         kb,
         text="⭐ Убрать из избранного" if is_favorite else "⭐ В избранное",
         callback_data=f"fav:history:{digest_id}:{page}",
         style="danger" if is_favorite else "success",
     )
+    button(kb, text="← К истории", callback_data=f"history:{page}")
     kb.adjust(1)
     return kb.as_markup()
