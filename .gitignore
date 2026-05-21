@@ -2,9 +2,9 @@
 bot.db
 *.db
 logs/
+reports/
 __pycache__/
 *.py[cod]
 .venv/
 .idea/
 .vscode/
-
