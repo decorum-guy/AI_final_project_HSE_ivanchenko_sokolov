@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
-from html import escape
+import re
 from datetime import datetime
+from html import escape
 from typing import Any
 
 from app.config import get_settings
@@ -10,6 +11,10 @@ from app.core.rss import NewsItem
 
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_TAG_RE = re.compile(r"</?(?:b|i|blockquote)>|<a\s+href=\"[^\"]+\">|</a>", re.IGNORECASE)
+MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)]\((https?://[^)\s]+)\)")
 
 
 def _extract_answer(response: Any) -> str:
@@ -67,6 +72,72 @@ async def ask_gigachat(
     return answer
 
 
+def sanitize_telegram_html(text: str) -> str:
+    """Keep only Telegram-safe tags used by the digest and escape everything else."""
+    result: list[str] = []
+    position = 0
+
+    for match in ALLOWED_TAG_RE.finditer(text):
+        result.append(escape(text[position : match.start()]))
+        tag = match.group(0)
+        lower_tag = tag.lower()
+
+        if lower_tag.startswith("<a "):
+            href_match = re.search(r'href="([^"]+)"', tag, flags=re.IGNORECASE)
+            href = href_match.group(1) if href_match else ""
+            if href.startswith(("http://", "https://")):
+                result.append(f'<a href="{escape(href, quote=True)}">')
+            else:
+                result.append(escape(tag))
+        else:
+            result.append(lower_tag)
+        position = match.end()
+
+    result.append(escape(text[position:]))
+    return "".join(result)
+
+
+def postprocess_digest_html(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"^```(?:html|HTML|json|JSON)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.replace("```html", "").replace("```HTML", "").replace("```json", "").replace("```JSON", "").replace("```", "")
+    text = MARKDOWN_LINK_RE.sub(r'<a href="\2">\1</a>', text)
+    text = MARKDOWN_BOLD_RE.sub(r"<b>\1</b>", text)
+    text = sanitize_telegram_html(text)
+
+    if "**" in text:
+        logger.warning("Digest post-processing left markdown bold markers in text")
+    if _has_early_summary(text):
+        logger.warning("Digest structure warning: итог appears before новости")
+    _log_digest_quality(text)
+    return text
+
+
+def _has_early_summary(text: str) -> bool:
+    news_index = text.lower().find("<b>новости</b>")
+    summary_index = text.lower().find("<b>итог</b>")
+    return summary_index != -1 and (news_index == -1 or summary_index < news_index)
+
+
+def _log_digest_quality(text: str) -> None:
+    lowered = text.lower()
+    if "```" in text or "##" in text or re.search(r"\[[^\]]+]\(https?://", text):
+        logger.warning("Digest structure warning: markdown markers are still present")
+    if lowered.count("<b>новости</b>") > 1:
+        logger.warning("Digest structure warning: multiple news blocks found")
+    if "<b>новости</b>" not in lowered:
+        logger.warning("Digest structure warning: news block is missing")
+    if "<b>итог</b>" not in lowered:
+        logger.warning("Digest structure warning: final summary block is missing")
+
+    news_blocks = re.findall(r"<b>\d+\.\s+.+?</b>(.*?)(?=<b>\d+\.\s+|<b>итог</b>|$)", text, flags=re.DOTALL | re.IGNORECASE)
+    for index, block in enumerate(news_blocks, start=1):
+        missing = [label for label in ("Кратко:", "Почему важно:", "Источник:") if label not in block]
+        if missing:
+            logger.warning("Digest structure warning: news #%s missing labels: %s", index, ", ".join(missing))
+
+
 class GigaChatDigestClient:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -79,7 +150,8 @@ class GigaChatDigestClient:
         prompt = self._build_digest_prompt(items, period_title)
         logger.info("Sending digest prompt to GigaChat: items=%s chars=%s", len(items), len(prompt))
         try:
-            return await ask_gigachat(prompt, max_tokens=1800, temperature=0.25)
+            answer = await ask_gigachat(prompt, max_tokens=3200, temperature=0.15)
+            return postprocess_digest_html(answer)
         except Exception as exc:
             logger.exception("GigaChat digest request failed, using fallback: %s", exc)
             return self._fallback_digest(items, period_title)
@@ -90,33 +162,42 @@ class GigaChatDigestClient:
             "",
             f"Период: {period_title}.",
             "",
-            "Сформируй дайджест на русском языке в формате Telegram-compatible HTML.",
-            "Правила:",
-            "1. Не придумывай факты, используй только переданные новости.",
-            "2. Используй <b>...</b> для заголовков блоков и названий новостей.",
-            "3. Используй <blockquote>...</blockquote> для короткого вводного блока и итога.",
-            "4. Все ссылки оформляй только как <a href=\"URL\">Название источника</a>.",
-            "5. Не выводи голые URL.",
-            "6. Не используй Markdown: никаких **жирных**, [текст](url) и # заголовков.",
-            "7. Символы <, >, & в обычном тексте экранируй или не используй вне HTML-тегов.",
-            "8. Ответ должен быть готов к отправке в Telegram с parse_mode='HTML'.",
-            "9. После вводного блока обязательно добавь короткий слоган дайджеста: одну яркую строку без тега blockquote.",
-            "10. Слоган должен идти сразу после краткого описания и перед первой новостью.",
+            "Сформируй дайджест на русском языке только в формате Telegram-compatible HTML.",
             "",
-            "Структура ответа:",
+            "Жесткие правила форматирования:",
+            "1. Используй только HTML, совместимый с Telegram parse_mode='HTML'.",
+            "2. Запрещен Markdown: нельзя использовать **, ##, [текст](url), ``` и любые markdown-блоки.",
+            "3. Жирный текст оформляй только через <b>...</b>.",
+            "4. Цитаты оформляй только через <blockquote>...</blockquote>.",
+            "5. Ссылки оформляй только как <a href=\"URL\">Название источника</a>.",
+            "6. Не выводи голые URL.",
+            "7. Не добавляй второй блок «Новости».",
+            "8. Не ставь «Итог» до списка новостей. Итог должен быть только в самом конце.",
+            "9. Каждая новость обязательно должна иметь строки «Кратко:», «Почему важно:» и «Источник:».",
+            "10. Не делай новости только из заголовка и ссылки.",
+            "11. Символы <, >, & в обычном тексте не используй вне разрешенных HTML-тегов.",
+            "",
+            "Строгий шаблон ответа:",
             f"<b>📰 Дайджест {period_title}</b>",
-            "<blockquote>Коротко: 2–3 главные темы дайджеста одним абзацем.</blockquote>",
-            "<i>Короткий слоган дайджеста в одну строку.</i>",
             "",
-            "<b>1. Заголовок новости</b>",
-            "Кратко: 1–2 предложения по сути новости.",
-            "Почему важно: короткое объяснение значения новости.",
+            "<blockquote>2–3 предложения: главная суть дайджеста.</blockquote>",
+            "",
+            "Слоган дайджеста:",
+            "<i>Короткий слоган дайджеста одной строкой.</i>",
+            "",
+            "<b>Новости</b>",
+            "",
+            "<b>1. Заголовок</b>",
+            "Кратко: 1–2 предложения.",
+            "Почему важно: 1 предложение.",
             "Источник: <a href=\"URL\">Название источника</a>",
             "",
-            "<b>Итог</b>",
-            "<blockquote>Короткий вывод по общей повестке.</blockquote>",
+            "... повтори блок для каждой выбранной новости ...",
             "",
-            "Новости:",
+            "<b>Итог</b>",
+            "<blockquote>Короткий общий вывод по дайджесту.</blockquote>",
+            "",
+            "Входные новости:",
         ]
         for index, item in enumerate(items, start=1):
             published = item.published.strftime("%d.%m.%Y") if isinstance(item.published, datetime) else "дата не указана"
@@ -137,22 +218,31 @@ class GigaChatDigestClient:
         if not items:
             return (
                 f"<b>📰 Дайджест {escape(period_title)}</b>\n\n"
-                "<blockquote>Подходящих новостей пока не найдено.</blockquote>\n"
-                "<i>Сегодня новостная пауза — тоже часть повестки.</i>"
+                "<blockquote>Подходящих новостей пока не найдено.</blockquote>\n\n"
+                "Слоган дайджеста:\n"
+                "<i>Сегодня новостная пауза — тоже часть повестки.</i>\n\n"
+                "<b>Новости</b>\n\n"
+                "<b>Итог</b>\n"
+                "<blockquote>Попробуйте выбрать другой период или добавить источники.</blockquote>"
             )
+
         slogan = self._fallback_slogan(items)
         lines = [
             f"<b>📰 Дайджест {escape(period_title)}</b>",
             "",
-            "<blockquote>Коротко: собрал свежие новости из выбранных RSS-источников.</blockquote>",
+            "<blockquote>Собрал свежие новости из выбранных RSS-источников.</blockquote>",
+            "",
+            "Слоган дайджеста:",
             f"<i>{escape(slogan)}</i>",
+            "",
+            "<b>Новости</b>",
             "",
         ]
         for index, item in enumerate(items[:12], start=1):
             published = item.published.strftime("%d.%m.%Y") if item.published else "дата не указана"
             source = escape(item.source)
             title = escape(item.title)
-            summary = escape(item.summary or "Краткое описание в RSS не указано.")
+            summary = escape(item.summary or "Короткое описание в RSS не указано.")
             if item.link:
                 source_line = f'Источник: <a href="{escape(item.link, quote=True)}">{source}</a>'
             else:
@@ -166,7 +256,6 @@ class GigaChatDigestClient:
                     "",
                 ]
             )
-        lines.append("")
         lines.append("<b>Итог</b>")
         lines.append("<blockquote>Это резервная версия дайджеста из RSS-заголовков, потому что GigaChat сейчас недоступен.</blockquote>")
         return "\n".join(lines)

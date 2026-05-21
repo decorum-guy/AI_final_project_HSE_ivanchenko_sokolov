@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 MAX_SOURCES_PER_DIGEST = 12
 MAX_ARTICLES_PER_SOURCE = {"today": 3, "3days": 4, "week": 5}
 MAX_TOTAL_ARTICLES = {"today": 25, "3days": 35, "week": 45}
+MAX_LLM_ARTICLES = 12
 MIN_TODAY_ARTICLES = 5
 
 
@@ -100,7 +101,7 @@ async def prepare_digest_input(
         ),
         reverse=True,
     )
-    total_limit = MAX_TOTAL_ARTICLES.get(period, 25)
+    total_limit = min(MAX_TOTAL_ARTICLES.get(period, 25), MAX_LLM_ARTICLES)
     final_items = ranked[:total_limit]
 
     stats = {
