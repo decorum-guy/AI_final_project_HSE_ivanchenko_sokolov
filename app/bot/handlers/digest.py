@@ -17,7 +17,14 @@ router = Router()
 @router.callback_query(F.data == "digest:start")
 async def choose_digest_mode(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
-    await safe_edit_message(callback.message, "Как сформировать дайджест?", reply_markup=digest_mode())
+    await safe_edit_message(
+        callback.message,
+        "Как сформировать дайджест?\n\n"
+        "🎯 По моим интересам — бот берет ваши выбранные источники, но выше ставит новости, которые ближе к вашим темам.\n\n"
+        "📡 По выбранным источникам — бот собирает свежие новости из ваших подписок без дополнительной сортировки по интересам.\n\n"
+        "Важно: ИИ-подбор источников и дайджест по интересам — разные вещи. Подбор источников помогает выбрать подписки, а режим по интересам персонально ранжирует новости внутри уже выбранных источников.",
+        reply_markup=digest_mode(),
+    )
 
 
 @router.callback_query(F.data.startswith("digest:mode:"))
