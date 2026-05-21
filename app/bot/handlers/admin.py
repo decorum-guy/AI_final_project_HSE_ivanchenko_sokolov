@@ -13,6 +13,8 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.keyboards.admin import (
     admin_back,
+    admin_long_mode,
+    admin_long_period,
     admin_menu,
     admin_stats_menu,
     admin_test_mode,
@@ -283,3 +285,63 @@ async def admin_test_period_selected(callback: CallbackQuery) -> None:
     edited = await safe_edit_message(loading or callback.message, text, reply_markup=keyboard, parse_mode=parse_mode)
     if not edited:
         await callback.message.answer(text, reply_markup=keyboard, disable_web_page_preview=True, parse_mode=parse_mode)
+
+
+@router.callback_query(F.data == "admin:long")
+async def admin_long_digest(callback: CallbackQuery) -> None:
+    if not await _ensure_admin(callback):
+        return
+    await safe_callback_answer(callback)
+    await safe_edit_message(
+        callback.message,
+        "📦 Тест длинного дайджеста\n\n"
+        "Сценарий специально показывает экран MESSAGE_TOO_LONG fallback: перегенерация, DOCX и PDF.",
+        reply_markup=admin_long_mode(),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:long:mode:"))
+async def admin_long_mode_selected(callback: CallbackQuery) -> None:
+    if not await _ensure_admin(callback):
+        return
+    await safe_callback_answer(callback)
+    mode = callback.data.split(":")[3]
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        selected = await queries.selected_sources(session, user.id)
+
+    if mode == "interests" and not user.interests_text:
+        await safe_edit_message(callback.message, "Сначала укажите интересы для теста режима по интересам.", reply_markup=admin_long_mode())
+        return
+    if not selected:
+        await safe_edit_message(callback.message, "Для теста длинного дайджеста сначала выберите источники.", reply_markup=admin_long_mode())
+        return
+
+    await safe_edit_message(
+        callback.message,
+        "За какой период подготовить тестовый длинный дайджест?",
+        reply_markup=admin_long_period(mode),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:long:period:"))
+async def admin_long_period_selected(callback: CallbackQuery) -> None:
+    if not await _ensure_admin(callback):
+        return
+    await safe_callback_answer(callback)
+    _, _, _, mode, period = callback.data.split(":")
+    loading = await safe_edit_message(
+        callback.message,
+        "📦 Собираю тестовый длинный дайджест...\n\n"
+        "Если такой дайджест уже есть в кэше, токены повторно не тратятся.",
+    )
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        digest = await build_digest(session, user, mode, period)
+        attempts = digest.shorten_attempts_left if digest.shorten_attempts_left is not None else 2
+
+    await safe_edit_message(
+        loading or callback.message,
+        LONG_DIGEST_TEXT,
+        reply_markup=long_digest_options(digest.id, attempts),
+    )

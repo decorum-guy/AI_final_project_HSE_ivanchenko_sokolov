@@ -13,8 +13,9 @@ def admin_menu() -> InlineKeyboardMarkup:
     button(kb, text="🔍 Проверить RSS", callback_data="admin:rss", style="primary")
     button(kb, text="♻️ Перезагрузить источники", callback_data="admin:reload", style="primary")
     button(kb, text="🧪 Тестовый дайджест", callback_data="admin:test", style="success")
+    button(kb, text="📦 Тест длинного дайджеста", callback_data="admin:long", style="success")
     button(kb, text="← Назад", callback_data="menu")
-    kb.adjust(2, 1, 1, 1)
+    kb.adjust(2, 1, 1, 1, 1)
     return kb.as_markup()
 
 
@@ -68,5 +69,24 @@ def admin_test_period(mode: str) -> InlineKeyboardMarkup:
     button(kb, text="3 дня", callback_data=f"admin:test:period:{mode}:3days")
     button(kb, text="Неделя", callback_data=f"admin:test:period:{mode}:week")
     button(kb, text="← Назад", callback_data="admin:test")
+    kb.adjust(3, 1)
+    return kb.as_markup()
+
+
+def admin_long_mode() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button(kb, text="🎯 По интересам", callback_data="admin:long:mode:interests", style="primary")
+    button(kb, text="📡 По источникам", callback_data="admin:long:mode:selected_sources", style="primary")
+    button(kb, text="← Назад", callback_data="admin:menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_long_period(mode: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button(kb, text="Сегодня", callback_data=f"admin:long:period:{mode}:today", style="primary")
+    button(kb, text="3 дня", callback_data=f"admin:long:period:{mode}:3days")
+    button(kb, text="Неделя", callback_data=f"admin:long:period:{mode}:week")
+    button(kb, text="← Назад", callback_data="admin:long")
     kb.adjust(3, 1)
     return kb.as_markup()
