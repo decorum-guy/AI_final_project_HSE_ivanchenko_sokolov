@@ -484,6 +484,86 @@ Ctrl+B, затем D
 tmux attach -t infopulse
 ```
 
+### Полезные команды на VPS
+
+Перейти в папку проекта:
+
+```bash
+cd /home/codex/apps/AI_final_project_HSE_ivanchenko_sokolov
+```
+
+Активировать виртуальное окружение:
+
+```bash
+source .venv/bin/activate
+```
+
+Запустить бота без watchdog для ручной проверки:
+
+```bash
+python -m app.bot.main
+```
+
+Запустить через watchdog:
+
+```bash
+python watchdog.py
+```
+
+Запустить watchdog в фоне без `tmux`:
+
+```bash
+setsid -f .venv/bin/python watchdog.py > logs/watchdog.out 2>&1 < /dev/null
+```
+
+Проверить процессы watchdog и бота:
+
+```bash
+pgrep -af 'watchdog.py|app.bot.main'
+```
+
+Остановить watchdog и бота:
+
+```bash
+kill -TERM <watchdog_pid> <bot_pid>
+```
+
+Если известны PID из `pgrep`, пример:
+
+```bash
+kill -TERM 12345 12346
+```
+
+Очистить логи:
+
+```bash
+find logs -maxdepth 1 -type f -exec truncate -s 0 {} \;
+```
+
+Смотреть логи watchdog:
+
+```bash
+tail -f logs/watchdog.log
+```
+
+Смотреть основной лог бота:
+
+```bash
+tail -f logs/bot.log
+```
+
+Смотреть только ошибки бота:
+
+```bash
+tail -f logs/bot-errors.log
+```
+
+Смотреть подробный debug-лог:
+
+```bash
+tail -f logs/bot-debug.log
+```
+
 ---
 
 ## Проверка работоспособности
