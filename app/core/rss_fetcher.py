@@ -30,26 +30,26 @@ def rss_status_from_result(result: dict[str, Any]) -> tuple[str, str, str]:
         return "ERROR", "HTTP_ERROR", f"HTTP status {http_status}"
 
     if result["body_size_bytes"] == 0:
-        return "ERROR", "EMPTY_RESPONSE", "Источник вернул пустой ответ"
+        return "ERROR", "EMPTY_RESPONSE", "Source returned an empty response"
 
     if result.get("looks_like_html") and result["entries_count"] == 0:
-        return "ERROR", "HTML_INSTEAD_OF_RSS", "Источник похож на HTML-страницу, а не на RSS/Atom"
+        return "ERROR", "HTML_INSTEAD_OF_RSS", "Response looks like HTML, not RSS/Atom"
 
     if result["entries_count"] == 0:
         if result["bozo"]:
             return "ERROR", "PARSE_ERROR_NO_ENTRIES", result["bozo_exception"]
-        return "ERROR", "NO_ENTRIES", "RSS прочитан, но новости не найдены"
+        return "ERROR", "NO_ENTRIES", "RSS parsed, but no entries found"
 
     if result["response_too_large"]:
-        return "WARNING", "RESPONSE_TOO_LARGE", "Ответ был слишком большим и был обрезан для проверки"
+        return "WARNING", "RESPONSE_TOO_LARGE", "Response was too large and was truncated"
 
     if result["bozo"]:
         return "WARNING", "PARSE_WARNING_WITH_ENTRIES", result["bozo_exception"]
 
     if result.get("looks_like_html"):
-        return "WARNING", "HTML_CONTENT_TYPE_WITH_ENTRIES", "Ответ похож на HTML, но feedparser смог извлечь новости"
+        return "WARNING", "HTML_CONTENT_TYPE_WITH_ENTRIES", "Response looks like HTML, but feedparser extracted entries"
 
-    return "OK", "OK", "RSS читается нормально"
+    return "OK", "OK", "RSS parsed successfully"
 
 
 async def fetch_rss_source(
@@ -142,6 +142,10 @@ async def fetch_rss_source(
 
     if isinstance(base_result["http_status"], int) and base_result["http_status"] >= 400:
         logger.warning("RSS HTTP error for %s (%s): %s", source_id, url, base_result["http_status"])
+        status, issue_code, recommendation = rss_status_from_result(base_result)
+        base_result.update({"status": status, "issue_code": issue_code, "recommendation": recommendation})
+        logger.warning("RSS source skipped for %s (%s): %s %s", source_id, url, issue_code, recommendation)
+        return base_result
 
     if base_result["body"]:
         try:
@@ -207,6 +211,10 @@ async def collect_articles_from_sources(
             )
             results.append(result)
             if progress_callback:
-                found = sum(item.get("entries_count", 0) for item in results if item.get("status") in {"OK", "WARNING"})
+                found = sum(
+                    item.get("entries_count", 0)
+                    for item in results
+                    if item.get("status") in {"OK", "WARNING"}
+                )
                 await progress_callback(index, total, found)
     return results
