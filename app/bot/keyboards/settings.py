@@ -1,13 +1,16 @@
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.bot.keyboards.styles import button
+
 
 def settings_menu(silent: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🌍 Часовой пояс", callback_data="settings:timezone", style="primary")
-    toggle = "выключить" if silent else "включить"
-    kb.button(text=f"🔕 Тихий режим: {toggle}", callback_data="settings:silent", style="warning" if silent else "success")
-    kb.button(text="← Назад", callback_data="menu")
+    button(kb, text="🌍 Изменить часовой пояс", callback_data="settings:timezone", style="primary")
+    if silent:
+        button(kb, text="🔔 Включить звук уведомлений", callback_data="settings:silent", style="success")
+    else:
+        button(kb, text="🔕 Отключить звук уведомлений", callback_data="settings:silent", style="danger")
+    button(kb, text="← Назад", callback_data="menu")
     kb.adjust(1)
     return kb.as_markup()
-

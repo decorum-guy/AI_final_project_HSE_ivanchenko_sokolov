@@ -4,6 +4,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.keyboards.digest import digest_period
 from app.bot.keyboards.main import main_menu
+from app.bot.keyboards.styles import button
 from app.db import queries
 from app.db.database import async_session
 
@@ -27,8 +28,8 @@ async def _categories_keyboard(context: str):
         categories = await queries.list_categories(session)
     kb = InlineKeyboardBuilder()
     for index, category in enumerate(categories):
-        kb.button(text=category, callback_data=f"sources:cat:{context}:{index}", style="primary")
-    kb.button(text="← Назад", callback_data=_context_back_callback(context))
+        button(kb, text=category, callback_data=f"sources:cat:{context}:{index}", style="primary")
+    button(kb, text="← Назад", callback_data=_context_back_callback(context))
     kb.adjust(2, 2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
@@ -49,13 +50,14 @@ async def _sources_keyboard(user_id: int, context: str, category_index: int, cat
     for source in sources:
         is_selected = source.source_id in selected
         mark = "✅" if is_selected else "☐"
-        kb.button(
+        button(
+            kb,
             text=f"{mark} {source.title}",
             callback_data=f"sources:toggle:{context}:{category_index}:{source.source_id}",
             style="success" if is_selected else None,
         )
-    kb.button(text="✅ Готово", callback_data=f"sources:done:{context}", style="success")
-    kb.button(text="← Назад", callback_data=f"sources:choose:{context}")
+    button(kb, text="✅ Готово", callback_data=f"sources:done:{context}", style="success")
+    button(kb, text="← Назад", callback_data=f"sources:choose:{context}")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -141,12 +143,12 @@ async def show_subscriptions(callback: CallbackQuery, prefix: str = "") -> None:
     kb = InlineKeyboardBuilder()
     if not sources:
         text = f"{prefix}⭐ Мои подписки\n\nВы пока не выбрали источники."
-        kb.button(text="📡 Выбрать источники", callback_data="sources:choose:subs", style="primary")
+        button(kb, text="📡 Выбрать источники", callback_data="sources:choose:subs", style="primary")
     else:
         lines = "\n".join(f"✅ {source.title}" for source in sources)
         text = f"{prefix}⭐ Мои подписки\n\nВы выбрали источники:\n\n{lines}"
-        kb.button(text="📡 Изменить источники", callback_data="sources:choose:subs", style="primary")
-    kb.button(text="← Назад", callback_data="menu")
+        button(kb, text="📡 Изменить источники", callback_data="sources:choose:subs", style="primary")
+    button(kb, text="← Назад", callback_data="menu")
     kb.adjust(1)
     await callback.message.edit_text(text, reply_markup=kb.as_markup())
     await callback.answer()
