@@ -15,6 +15,9 @@ async def safe_callback_answer(callback: CallbackQuery, text: str | None = None,
         if "query is too old" in error_text or "query ID is invalid" in error_text:
             return
         raise
+    except TelegramNetworkError as exc:
+        logger.warning("Telegram callback answer timeout/network error: %s", exc)
+        return
 
 
 async def safe_edit_message(message: Message, text: str, reply_markup=None, disable_web_page_preview: bool = True):
