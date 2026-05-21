@@ -31,7 +31,10 @@ async def _categories_keyboard(context: str):
     for index, category in enumerate(categories):
         button(kb, text=category, callback_data=f"sources:cat:{context}:{index}", style="primary")
     button(kb, text="← Назад", callback_data=_context_back_callback(context))
-    kb.adjust(2, 2, 2, 2, 2, 2, 1)
+    category_rows = [2] * (len(categories) // 2)
+    if len(categories) % 2:
+        category_rows.append(1)
+    kb.adjust(*category_rows, 1)
     return kb.as_markup()
 
 
