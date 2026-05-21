@@ -1,0 +1,10 @@
+.env
+bot.db
+*.db
+logs/
+__pycache__/
+*.py[cod]
+.venv/
+.idea/
+.vscode/
+

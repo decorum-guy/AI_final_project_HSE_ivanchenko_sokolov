@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import DigestHistory, NewsSource, User, UserSource
+
+
+logger = logging.getLogger(__name__)
+SOURCES_XLSX = Path("app/data/sources.xlsx")
+REQUIRED_SOURCE_COLUMNS = {"source_id", "title", "category", "description", "rss_url", "is_active"}
+
+DEFAULT_SOURCES = [
+    {
+        "source_id": "rbc_tech",
+        "title": "РБК Технологии",
+        "category": "Технологии",
+        "description": "Новости технологий и цифровой экономики",
+        "rss_url": "https://rssexport.rbc.ru/rbcnews/technology.rss",
+        "is_active": True,
+    },
+    {
+        "source_id": "tass_all",
+        "title": "ТАСС",
+        "category": "Общество",
+        "description": "Главные новости России и мира",
+        "rss_url": "https://tass.ru/rss/v2.xml",
+        "is_active": True,
+    },
+    {
+        "source_id": "kommersant_news",
+        "title": "Коммерсантъ",
+        "category": "Бизнес",
+        "description": "Главные новости, экономика и политика",
+        "rss_url": "https://www.kommersant.ru/RSS/news.xml",
+        "is_active": True,
+    },
+    {
+        "source_id": "habr_articles",
+        "title": "Хабр",
+        "category": "IT",
+        "description": "Статьи и новости IT",
+        "rss_url": "https://habr.com/ru/rss/articles/",
+        "is_active": True,
+    },
+]
+
+
+def _to_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        return bool(value)
+    return str(value).strip().lower() in {"true", "1", "yes", "y", "да", "истина"}
+
+
+def _read_sources_rows() -> list[dict]:
+    if not SOURCES_XLSX.exists():
+        logger.warning("sources.xlsx not found, using in-code default sources")
+        return DEFAULT_SOURCES
+
+    frame = pd.read_excel(SOURCES_XLSX, engine="openpyxl")
+    missing = REQUIRED_SOURCE_COLUMNS - set(frame.columns)
+    if missing:
+        logger.warning("sources.xlsx misses columns: %s", ", ".join(sorted(missing)))
+
+    rows: list[dict] = []
+    for index, row in frame.iterrows():
+        source_id = str(row.get("source_id", "")).strip()
+        rss_url = str(row.get("rss_url", "")).strip()
+        if not source_id or source_id.lower() == "nan" or not rss_url or rss_url.lower() == "nan":
+            logger.warning("Skipping source row %s: source_id or rss_url is empty", index + 2)
+            continue
+        rows.append(
+            {
+                "source_id": source_id,
+                "title": str(row.get("title", source_id)).strip(),
+                "category": str(row.get("category", "Без категории")).strip(),
+                "description": str(row.get("description", "")).strip(),
+                "rss_url": rss_url,
+                "is_active": _to_bool(row.get("is_active", True)),
+            }
+        )
+    return rows or DEFAULT_SOURCES
+
+
+async def sync_sources(session: AsyncSession) -> None:
+    """Read sources.xlsx without rewriting it and upsert sources into SQLite."""
+    for row in _read_sources_rows():
+        source = await session.scalar(select(NewsSource).where(NewsSource.source_id == row["source_id"]))
+        if not source:
+            source = NewsSource(**row)
+            session.add(source)
+            continue
+        source.title = row["title"]
+        source.category = row["category"]
+        source.description = row["description"]
+        source.rss_url = row["rss_url"]
+        source.is_active = row["is_active"]
+    await session.commit()
+
+
+async def seed_sources(session: AsyncSession) -> None:
+    await sync_sources(session)
+
+
+async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None) -> User:
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    if user:
+        if username is not None and user.username != username:
+            user.username = username
+            await session.commit()
+        return user
+    user = User(telegram_id=telegram_id, username=username)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def list_sources(session: AsyncSession) -> list[NewsSource]:
+    result = await session.scalars(select(NewsSource).where(NewsSource.is_active.is_(True)).order_by(NewsSource.category, NewsSource.title))
+    return list(result)
+
+
+async def list_categories(session: AsyncSession) -> list[str]:
+    result = await session.scalars(
+        select(NewsSource.category)
+        .where(NewsSource.is_active.is_(True))
+        .group_by(NewsSource.category)
+        .order_by(NewsSource.category)
+    )
+    return [category for category in result if category]
+
+
+async def sources_by_category(session: AsyncSession, category: str) -> list[NewsSource]:
+    result = await session.scalars(
+        select(NewsSource)
+        .where(NewsSource.is_active.is_(True), NewsSource.category == category)
+        .order_by(NewsSource.title)
+    )
+    return list(result)
+
+
+async def selected_source_ids(session: AsyncSession, user_id: int) -> set[str]:
+    result = await session.scalars(select(UserSource.source_id).where(UserSource.user_id == user_id))
+    return set(result)
+
+
+async def selected_sources(session: AsyncSession, user_id: int) -> list[NewsSource]:
+    ids = await selected_source_ids(session, user_id)
+    if not ids:
+        return []
+    result = await session.scalars(
+        select(NewsSource)
+        .where(NewsSource.source_id.in_(ids), NewsSource.is_active.is_(True))
+        .order_by(NewsSource.category, NewsSource.title)
+    )
+    found = list(result)
+    missing = ids - {source.source_id for source in found}
+    for source_id in sorted(missing):
+        logger.warning("User %s has unknown or inactive source_id subscription: %s", user_id, source_id)
+    return found
+
+
+async def toggle_source(session: AsyncSession, user_id: int, source_id: str) -> bool:
+    source = await session.scalar(select(NewsSource).where(NewsSource.source_id == source_id, NewsSource.is_active.is_(True)))
+    if not source:
+        logger.warning("Cannot toggle unknown or inactive source_id: %s", source_id)
+        return False
+    link = await session.scalar(select(UserSource).where(UserSource.user_id == user_id, UserSource.source_id == source_id))
+    if link:
+        await session.delete(link)
+        await session.commit()
+        return False
+    session.add(UserSource(user_id=user_id, source_id=source_id))
+    await session.commit()
+    return True
+
+
+async def sources_for_user(session: AsyncSession, user_id: int, mode: str) -> list[NewsSource]:
+    if mode == "selected_sources":
+        selected = await selected_sources(session, user_id)
+        return selected
+    return await list_sources(session)
+
+
+async def create_digest(
+    session: AsyncSession,
+    user_id: int,
+    text: str,
+    period: str,
+    source_mode: str,
+    used_links: list[str],
+) -> DigestHistory:
+    digest = DigestHistory(
+        user_id=user_id,
+        digest_text=text,
+        period=period,
+        source_mode=source_mode,
+        used_links="\n".join(used_links),
+    )
+    session.add(digest)
+    await session.commit()
+    await session.refresh(digest)
+    return digest
+
+
+async def get_digest(session: AsyncSession, digest_id: int, user_id: int) -> DigestHistory | None:
+    return await session.scalar(select(DigestHistory).where(DigestHistory.id == digest_id, DigestHistory.user_id == user_id))
+
+
+async def cached_digest(session: AsyncSession, user_id: int, period: str, source_mode: str) -> DigestHistory | None:
+    return await session.scalar(
+        select(DigestHistory)
+        .where(DigestHistory.user_id == user_id, DigestHistory.period == period, DigestHistory.source_mode == source_mode)
+        .order_by(DigestHistory.created_at.desc())
+        .limit(1)
+    )
+
+
+async def history_page(session: AsyncSession, user_id: int, page: int, per_page: int = 5) -> tuple[list[DigestHistory], int]:
+    total = await session.scalar(select(func.count(DigestHistory.id)).where(DigestHistory.user_id == user_id)) or 0
+    result = await session.scalars(
+        select(DigestHistory)
+        .where(DigestHistory.user_id == user_id)
+        .order_by(DigestHistory.created_at.desc())
+        .offset(page * per_page)
+        .limit(per_page)
+    )
+    return list(result), total
+
+
+async def set_favorite(session: AsyncSession, digest: DigestHistory, value: bool) -> None:
+    digest.is_favorite = value
+    await session.commit()
+
+
+async def set_feedback(session: AsyncSession, digest: DigestHistory, feedback: str) -> None:
+    digest.feedback = feedback
+    digest.feedback_created_at = datetime.utcnow()
+    await session.commit()
+
+
+async def decrement_refresh(session: AsyncSession, digest: DigestHistory) -> None:
+    digest.refresh_attempts_left = max(0, digest.refresh_attempts_left - 1)
+    await session.commit()
+
+
+async def save_interests(session: AsyncSession, user: User, text: str) -> None:
+    user.interests_text = text.strip()
+    await session.commit()
+
+
+async def save_timezone(session: AsyncSession, user: User, timezone: str) -> None:
+    user.timezone = timezone
+    await session.commit()
+
+
+async def save_schedule(session: AsyncSession, user: User, schedule_type: str, schedule_time: str) -> None:
+    user.schedule_enabled = True
+    user.schedule_type = schedule_type
+    user.schedule_time = schedule_time
+    await session.commit()
+
+
+async def disable_schedule(session: AsyncSession, user: User) -> None:
+    user.schedule_enabled = False
+    user.schedule_type = None
+    user.schedule_time = None
+    await session.commit()
+
+
+async def toggle_silent(session: AsyncSession, user: User) -> bool:
+    user.silent_notifications = not user.silent_notifications
+    await session.commit()
+    return user.silent_notifications
+
+
+async def scheduled_users(session: AsyncSession) -> list[User]:
+    result = await session.scalars(select(User).where(User.schedule_enabled.is_(True), User.timezone.is_not(None)))
+    return list(result)
