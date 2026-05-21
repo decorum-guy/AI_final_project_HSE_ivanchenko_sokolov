@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-import logging
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
-import feedparser
-
+from app.core.rss_fetcher import collect_articles_from_sources
 from app.db.models import NewsSource
 
 
-logger = logging.getLogger(__name__)
 PERIOD_DAYS = {"today": 1, "3days": 3, "week": 7}
 PERIOD_TITLES = {"today": "за сегодня", "3days": "за последние 3 дня", "week": "за неделю"}
 
@@ -34,7 +29,14 @@ def period_since(period: str) -> datetime:
 
 
 def _entry_date(entry) -> datetime | None:
-    raw = entry.get("published") or entry.get("updated")
+    for key in ("published_parsed", "updated_parsed", "created_parsed"):
+        value = entry.get(key)
+        if value:
+            try:
+                return datetime(*value[:6], tzinfo=timezone.utc)
+            except Exception:
+                pass
+    raw = entry.get("published") or entry.get("updated") or entry.get("created")
     if not raw:
         return None
     try:
@@ -49,24 +51,13 @@ def _short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def _parse_source(source: NewsSource, since: datetime, timeout: int = 10) -> list[NewsItem]:
-    try:
-        request = urllib.request.Request(source.rss_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            content = response.read(1024 * 1024)
-        feed = feedparser.parse(content)
-    except Exception:
-        logger.warning("RSS source failed: %s (%s)", source.source_id, source.rss_url, exc_info=True)
+def _items_from_result(source: NewsSource, result: dict, since: datetime) -> list[NewsItem]:
+    if result.get("status") == "ERROR":
         return []
-
-    if getattr(feed, "bozo", False):
-        logger.warning("RSS parse warning for %s (%s): %s", source.source_id, source.rss_url, getattr(feed, "bozo_exception", "unknown"))
-    if not feed.entries:
-        logger.warning("RSS source has empty feed: %s (%s)", source.source_id, source.rss_url)
-        return []
-
+    parsed = result.get("parsed")
+    entries = list(getattr(parsed, "entries", []) or []) if parsed else []
     items: list[NewsItem] = []
-    for entry in feed.entries[:50]:
+    for entry in entries[:50]:
         published = _entry_date(entry)
         if published and published < since:
             continue
@@ -90,22 +81,19 @@ async def fetch_news(
     progress_callback=None,
 ) -> tuple[list[NewsItem], dict[str, int]]:
     since = period_since(period)
-    total = len(sources)
-    found = 0
+    results = await collect_articles_from_sources(sources, progress_callback=progress_callback)
+    by_source_id = {source.source_id: source for source in sources}
     items: list[NewsItem] = []
-    stats = {
-        "sources_selected": total,
-        "sources_used": total,
-        "articles_collected_before_filtering": 0,
-        "articles_after_date_filter": 0,
-    }
+    for result in results:
+        source = by_source_id.get(result["source_id"])
+        if not source:
+            continue
+        items.extend(_items_from_result(source, result, since))
 
-    for index, source in enumerate(sources, start=1):
-        chunk = await asyncio.to_thread(_parse_source, source, since)
-        found += len(chunk)
-        items.extend(chunk)
-        stats["articles_collected_before_filtering"] += len(chunk)
-        stats["articles_after_date_filter"] += len(chunk)
-        if progress_callback and (index == total or index % 2 == 0):
-            await progress_callback(index, total, found)
+    stats = {
+        "sources_selected": len(sources),
+        "sources_used": len([result for result in results if result.get("status") in {"OK", "WARNING"}]),
+        "articles_collected_before_filtering": sum(result.get("entries_count", 0) for result in results),
+        "articles_after_date_filter": len(items),
+    }
     return items, stats
