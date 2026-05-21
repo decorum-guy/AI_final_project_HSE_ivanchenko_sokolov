@@ -1,10 +1,9 @@
 import asyncio
-import logging
-
 from aiogram import Dispatcher
 
 from app.bot.factory import create_bot
 from app.bot.handlers import setup_routers
+from app.bot.logging_config import configure_bot_logging
 from app.bot.middlewares import UserActivityMiddleware
 from app.config import get_settings
 from app.core.scheduler import start_scheduler, stop_scheduler
@@ -14,7 +13,7 @@ from app.db.queries import seed_sources
 
 async def main() -> None:
     settings = get_settings()
-    logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
+    configure_bot_logging(settings.log_level)
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN is empty. Add it to .env before starting the bot.")
 
