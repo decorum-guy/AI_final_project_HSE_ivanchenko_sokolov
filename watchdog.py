@@ -9,7 +9,7 @@ from pathlib import Path
 
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "watchdog.log"
-BOT_COMMAND = [sys.executable, "-m", "app.bot.main"]
+BOT_COMMAND = [sys.executable, "-u", "-m", "app.bot.main"]
 
 
 def configure_logging() -> None:
@@ -84,4 +84,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
