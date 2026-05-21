@@ -1,8 +1,9 @@
 import asyncio
 import logging
 
-from aiogram import Bot, Dispatcher
+from aiogram import Dispatcher
 
+from app.bot.factory import create_bot
 from app.bot.handlers import setup_routers
 from app.bot.middlewares import UserActivityMiddleware
 from app.config import get_settings
@@ -21,7 +22,7 @@ async def main() -> None:
     async with async_session() as session:
         await seed_sources(session)
 
-    bot = Bot(token=settings.bot_token)
+    bot = create_bot(settings)
     dp = Dispatcher()
     dp.message.middleware(UserActivityMiddleware())
     dp.callback_query.middleware(UserActivityMiddleware())
