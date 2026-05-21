@@ -3,6 +3,8 @@ bot.db
 *.db
 logs/
 reports/
+yes
+yes.pub
 __pycache__/
 *.py[cod]
 .venv/
