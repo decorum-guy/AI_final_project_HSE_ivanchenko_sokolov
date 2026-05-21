@@ -213,8 +213,26 @@ async def toggle_source(session: AsyncSession, user_id: int, source_id: str) -> 
     return True
 
 
+async def add_user_sources(session: AsyncSession, user_id: int, source_ids: list[str]) -> int:
+    existing = await selected_source_ids(session, user_id)
+    added = 0
+    for source_id in source_ids:
+        if source_id in existing:
+            continue
+        source = await session.scalar(select(NewsSource).where(NewsSource.source_id == source_id, NewsSource.is_active.is_(True)))
+        if not source:
+            logger.warning("Cannot add unknown or inactive source_id: %s", source_id)
+            continue
+        session.add(UserSource(user_id=user_id, source_id=source_id))
+        existing.add(source_id)
+        added += 1
+    if added:
+        await session.commit()
+    return added
+
+
 async def sources_for_user(session: AsyncSession, user_id: int, mode: str) -> list[NewsSource]:
-    if mode == "selected_sources":
+    if mode in {"selected_sources", "interests"}:
         selected = await selected_sources(session, user_id)
         return selected
     return await list_sources(session)

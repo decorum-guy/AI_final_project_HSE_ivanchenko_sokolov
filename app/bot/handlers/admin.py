@@ -21,6 +21,7 @@ from app.bot.keyboards.admin import (
     user_title,
 )
 from app.bot.keyboards.digest import digest_actions
+from app.bot.utils import safe_callback_answer, safe_edit_message
 from app.config import get_settings
 from app.core.digest import build_digest
 from app.db import queries
@@ -67,7 +68,7 @@ async def admin_menu_callback(callback: CallbackQuery) -> None:
     if not await _ensure_admin(callback):
         return
     await callback.message.edit_text("Админ-панель", reply_markup=admin_menu())
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "admin:stats")
@@ -75,7 +76,7 @@ async def admin_stats(callback: CallbackQuery) -> None:
     if not await _ensure_admin(callback):
         return
     await callback.message.edit_text("📊 Статистика\n\nВыберите раздел:", reply_markup=admin_stats_menu())
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "admin:stats:general")
@@ -95,7 +96,7 @@ async def admin_general_stats(callback: CallbackQuery) -> None:
         f"Всего пользовательских подписок на источники: {stats['subscriptions_count']}"
     )
     await callback.message.edit_text(text, reply_markup=admin_back("admin:stats"))
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("admin:users:"))
@@ -109,7 +110,7 @@ async def admin_users(callback: CallbackQuery) -> None:
     if total == 0:
         text += "\n\nПользователей пока нет."
     await callback.message.edit_text(text, reply_markup=admin_users_list(users, page, total))
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("admin:user:"))
@@ -121,7 +122,7 @@ async def admin_user_card(callback: CallbackQuery) -> None:
     async with async_session() as session:
         user = await queries.get_user_by_id(session, int(user_id_raw))
         if not user:
-            await callback.answer("Пользователь не найден", show_alert=True)
+            await safe_callback_answer(callback, "Пользователь не найден", show_alert=True)
             return
         stats = await queries.admin_user_stats(session, user.id)
 
@@ -144,7 +145,7 @@ async def admin_user_card(callback: CallbackQuery) -> None:
         f"Последняя активность: {activity}"
     )
     await callback.message.edit_text(text, reply_markup=admin_back(f"admin:users:{page}"))
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,7 @@ def _check_one_source(source: NewsSource, timeout: int = 8) -> RssCheckResult:
 async def admin_check_rss(callback: CallbackQuery) -> None:
     if not await _ensure_admin(callback):
         return
+    await safe_callback_answer(callback)
     await callback.message.edit_text("Проверяю активные RSS-источники. Это может занять немного времени...")
     async with async_session() as session:
         await queries.sync_sources(session)
@@ -199,13 +201,14 @@ async def admin_check_rss(callback: CallbackQuery) -> None:
         if len(bad) > 10:
             lines.append("Показаны первые 10 ошибок.")
     await callback.message.edit_text("\n".join(lines), reply_markup=admin_back("admin:menu"))
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "admin:reload")
 async def admin_reload_sources(callback: CallbackQuery) -> None:
     if not await _ensure_admin(callback):
         return
+    await safe_callback_answer(callback)
     async with async_session() as session:
         await queries.sync_sources(session)
         active_sources = await queries.list_sources(session)
@@ -216,24 +219,26 @@ async def admin_reload_sources(callback: CallbackQuery) -> None:
         f"Категорий: {len(categories)}"
     )
     await callback.message.edit_text(text, reply_markup=admin_back("admin:menu"))
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "admin:test")
 async def admin_test_digest(callback: CallbackQuery) -> None:
     if not await _ensure_admin(callback):
         return
-    await callback.message.edit_text(
+    await safe_callback_answer(callback)
+    await safe_edit_message(
+        callback.message,
         "🧪 Тестовый дайджест\n\nКак сформировать тестовый дайджест?",
         reply_markup=admin_test_mode(),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin:test:mode:"))
 async def admin_test_mode_selected(callback: CallbackQuery) -> None:
     if not await _ensure_admin(callback):
         return
+    await safe_callback_answer(callback)
     mode = callback.data.split(":")[3]
     if mode == "selected_sources":
         async with async_session() as session:
@@ -242,28 +247,27 @@ async def admin_test_mode_selected(callback: CallbackQuery) -> None:
         if not selected:
             from app.bot.handlers.sources import _categories_keyboard
 
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback.message,
                 "У вас пока нет выбранных источников. Сначала выберите источники для тестового дайджеста.",
                 reply_markup=await _categories_keyboard("admin_test"),
             )
-            await callback.answer()
             return
-    await callback.message.edit_text("За какой период подготовить тестовый дайджест?", reply_markup=admin_test_period(mode))
-    await callback.answer()
+    await safe_edit_message(callback.message, "За какой период подготовить тестовый дайджест?", reply_markup=admin_test_period(mode))
 
 
 @router.callback_query(F.data.startswith("admin:test:period:"))
 async def admin_test_period_selected(callback: CallbackQuery) -> None:
     if not await _ensure_admin(callback):
         return
+    await safe_callback_answer(callback)
     _, _, _, mode, period = callback.data.split(":")
-    await callback.message.edit_text("Готовлю тестовый дайджест: читаю RSS и собираю главное...")
+    loading = await safe_edit_message(callback.message, "⏳ Собираю тестовый дайджест...\n\nПодготавливаю источники и свежие новости.")
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         digest = await build_digest(session, user, mode, period)
-        await callback.message.answer(
-            "🧪 Тестовый дайджест\n\n" + digest.digest_text,
-            reply_markup=digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite),
-            disable_web_page_preview=True,
-        )
-    await callback.answer()
+        text = "🧪 Тестовый дайджест\n\n" + digest.digest_text
+        keyboard = digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite)
+    edited = await safe_edit_message(loading or callback.message, text, reply_markup=keyboard)
+    if not edited:
+        await callback.message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)

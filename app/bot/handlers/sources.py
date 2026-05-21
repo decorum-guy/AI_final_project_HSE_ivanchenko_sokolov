@@ -5,6 +5,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.bot.keyboards.digest import digest_period
 from app.bot.keyboards.main import main_menu
 from app.bot.keyboards.styles import button
+from app.bot.utils import safe_callback_answer
 from app.db import queries
 from app.db.database import async_session
 
@@ -67,7 +68,7 @@ async def _open_categories(callback: CallbackQuery, context: str) -> None:
         "📡 Выбор источников\n\nСначала выберите категорию:",
         reply_markup=await _categories_keyboard(context),
     )
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "sources:show")
@@ -85,11 +86,12 @@ async def sources_choose_context(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sources:cat:"))
 async def category_screen(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
     _, _, context, index_raw = callback.data.split(":")
     category_index = int(index_raw)
     category = await _category_by_index(category_index)
     if not category:
-        await callback.answer("Категория не найдена", show_alert=True)
+        await safe_callback_answer(callback, "Категория не найдена", show_alert=True)
         return
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
@@ -97,26 +99,27 @@ async def category_screen(callback: CallbackQuery) -> None:
         f"📡 {category}\n\nВыберите источники для дайджеста.\nНажмите на источник, чтобы добавить или убрать его.",
         reply_markup=await _sources_keyboard(user.id, context, category_index, category),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("sources:toggle:"))
 async def toggle_source(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
     _, _, context, index_raw, source_id = callback.data.split(":", 4)
     category_index = int(index_raw)
     category = await _category_by_index(category_index)
     if not category:
-        await callback.answer("Категория не найдена", show_alert=True)
+        await safe_callback_answer(callback, "Категория не найдена", show_alert=True)
         return
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         selected = await queries.toggle_source(session, user.id, source_id)
     await callback.message.edit_reply_markup(reply_markup=await _sources_keyboard(user.id, context, category_index, category))
-    await callback.answer("Источник добавлен" if selected else "Источник удален")
+    await safe_callback_answer(callback, "Источник добавлен" if selected else "Источник удален")
 
 
 @router.callback_query(F.data.startswith("sources:done:"))
 async def sources_done(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
     context = callback.data.split(":")[2]
     if context == "digest":
         await callback.message.edit_text("За какой период подготовить дайджест?", reply_markup=digest_period("selected_sources"))
@@ -128,15 +131,15 @@ async def sources_done(callback: CallbackQuery) -> None:
         await show_subscriptions(callback, prefix="Источники обновлены.\n\n")
     else:
         await callback.message.edit_text("Источники обновлены.", reply_markup=main_menu())
-        await callback.answer()
 
 
 @router.callback_query(F.data == "subs:show")
 async def subscriptions(callback: CallbackQuery) -> None:
-    await show_subscriptions(callback)
+    await safe_callback_answer(callback)
+    await show_subscriptions(callback, answer=False)
 
 
-async def show_subscriptions(callback: CallbackQuery, prefix: str = "") -> None:
+async def show_subscriptions(callback: CallbackQuery, prefix: str = "", answer: bool = True) -> None:
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         sources = await queries.selected_sources(session, user.id)
@@ -151,4 +154,5 @@ async def show_subscriptions(callback: CallbackQuery, prefix: str = "") -> None:
     button(kb, text="← Назад", callback_data="menu")
     kb.adjust(1)
     await callback.message.edit_text(text, reply_markup=kb.as_markup())
-    await callback.answer()
+    if answer:
+        await safe_callback_answer(callback)

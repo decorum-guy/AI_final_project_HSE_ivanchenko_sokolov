@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -21,6 +22,8 @@ class NewsItem:
     title: str
     link: str
     source: str
+    source_id: str
+    category: str
     published: datetime | None
     summary: str = ""
 
@@ -41,38 +44,68 @@ def _entry_date(entry) -> datetime | None:
         return None
 
 
-def _parse_source(source: NewsSource, since: datetime) -> list[NewsItem]:
-    feed = feedparser.parse(source.rss_url)
+def _short(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _parse_source(source: NewsSource, since: datetime, timeout: int = 10) -> list[NewsItem]:
+    try:
+        request = urllib.request.Request(source.rss_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            content = response.read(1024 * 1024)
+        feed = feedparser.parse(content)
+    except Exception:
+        logger.warning("RSS source failed: %s (%s)", source.source_id, source.rss_url, exc_info=True)
+        return []
+
     if getattr(feed, "bozo", False):
         logger.warning("RSS parse warning for %s (%s): %s", source.source_id, source.rss_url, getattr(feed, "bozo_exception", "unknown"))
+    if not feed.entries:
+        logger.warning("RSS source has empty feed: %s (%s)", source.source_id, source.rss_url)
+        return []
+
     items: list[NewsItem] = []
-    for entry in feed.entries[:30]:
+    for entry in feed.entries[:50]:
         published = _entry_date(entry)
         if published and published < since:
             continue
         items.append(
             NewsItem(
-                title=entry.get("title", "Без заголовка").strip(),
-                link=entry.get("link", "").strip(),
+                title=_short(entry.get("title", "Без заголовка"), 180),
+                link=(entry.get("link") or "").strip(),
                 source=source.title,
+                source_id=source.source_id,
+                category=source.category,
                 published=published,
-                summary=entry.get("summary", "").strip(),
+                summary=_short(entry.get("summary", ""), 500),
             )
         )
     return items
 
 
-async def fetch_news(sources: list[NewsSource], period: str) -> list[NewsItem]:
+async def fetch_news(
+    sources: list[NewsSource],
+    period: str,
+    progress_callback=None,
+) -> tuple[list[NewsItem], dict[str, int]]:
     since = period_since(period)
-    chunks = await asyncio.gather(*(asyncio.to_thread(_parse_source, source, since) for source in sources), return_exceptions=True)
+    total = len(sources)
+    found = 0
     items: list[NewsItem] = []
-    for chunk in chunks:
-        if isinstance(chunk, list):
-            items.extend(chunk)
-        elif isinstance(chunk, Exception):
-            logger.warning("RSS source failed: %s", chunk)
-    unique: dict[str, NewsItem] = {}
-    for item in items:
-        key = item.link or f"{item.source}:{item.title}"
-        unique[key] = item
-    return sorted(unique.values(), key=lambda item: item.published or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    stats = {
+        "sources_selected": total,
+        "sources_used": total,
+        "articles_collected_before_filtering": 0,
+        "articles_after_date_filter": 0,
+    }
+
+    for index, source in enumerate(sources, start=1):
+        chunk = await asyncio.to_thread(_parse_source, source, since)
+        found += len(chunk)
+        items.extend(chunk)
+        stats["articles_collected_before_filtering"] += len(chunk)
+        stats["articles_after_date_filter"] += len(chunk)
+        if progress_callback and (index == total or index % 2 == 0):
+            await progress_callback(index, total, found)
+    return items, stats
