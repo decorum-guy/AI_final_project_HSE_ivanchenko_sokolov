@@ -59,7 +59,10 @@ async def _sources_keyboard(user_id: int, context: str, category_index: int, cat
         )
     button(kb, text="✅ Готово", callback_data=f"sources:done:{context}", style="success")
     button(kb, text="← Назад", callback_data=f"sources:choose:{context}")
-    kb.adjust(1)
+    source_rows = [2] * (len(sources) // 2)
+    if len(sources) % 2:
+        source_rows.append(1)
+    kb.adjust(*source_rows, 1, 1)
     return kb.as_markup()
 
 
