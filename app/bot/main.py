@@ -4,6 +4,7 @@ import logging
 from aiogram import Bot, Dispatcher
 
 from app.bot.handlers import setup_routers
+from app.bot.middlewares import UserActivityMiddleware
 from app.config import get_settings
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.db.database import async_session, init_db
@@ -22,6 +23,8 @@ async def main() -> None:
 
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher()
+    dp.message.middleware(UserActivityMiddleware())
+    dp.callback_query.middleware(UserActivityMiddleware())
     dp.include_router(setup_routers())
     await start_scheduler(bot)
     try:

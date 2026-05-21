@@ -9,12 +9,14 @@ from app.db.database import async_session
 
 
 router = Router()
-SOURCE_CONTEXTS = {"main", "digest", "subs"}
+SOURCE_CONTEXTS = {"main", "digest", "subs", "admin_test"}
 
 
 def _context_back_callback(context: str) -> str:
     if context == "digest":
         return "digest:start"
+    if context == "admin_test":
+        return "admin:test"
     if context == "subs":
         return "subs:show"
     return "menu"
@@ -111,6 +113,10 @@ async def sources_done(callback: CallbackQuery) -> None:
     context = callback.data.split(":")[2]
     if context == "digest":
         await callback.message.edit_text("За какой период подготовить дайджест?", reply_markup=digest_period("selected_sources"))
+    elif context == "admin_test":
+        from app.bot.keyboards.admin import admin_test_period
+
+        await callback.message.edit_text("За какой период подготовить тестовый дайджест?", reply_markup=admin_test_period("selected_sources"))
     elif context == "subs":
         await show_subscriptions(callback, prefix="Источники обновлены.\n\n")
     else:

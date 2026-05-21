@@ -109,14 +109,40 @@ async def seed_sources(session: AsyncSession) -> None:
     await sync_sources(session)
 
 
-async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None) -> User:
+async def get_or_create_user(
+    session: AsyncSession,
+    telegram_id: int,
+    username: str | None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    touch: bool = True,
+) -> User:
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    now = datetime.utcnow()
     if user:
+        changed = False
         if username is not None and user.username != username:
             user.username = username
+            changed = True
+        if first_name is not None and user.first_name != first_name:
+            user.first_name = first_name
+            changed = True
+        if last_name is not None and user.last_name != last_name:
+            user.last_name = last_name
+            changed = True
+        if touch:
+            user.last_activity_at = now
+            changed = True
+        if changed:
             await session.commit()
         return user
-    user = User(telegram_id=telegram_id, username=username)
+    user = User(
+        telegram_id=telegram_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name,
+        last_activity_at=now if touch else None,
+    )
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -124,14 +150,18 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, username: 
 
 
 async def list_sources(session: AsyncSession) -> list[NewsSource]:
-    result = await session.scalars(select(NewsSource).where(NewsSource.is_active.is_(True)).order_by(NewsSource.category, NewsSource.title))
+    result = await session.scalars(
+        select(NewsSource)
+        .where(NewsSource.is_active.is_(True), NewsSource.source_id.is_not(None))
+        .order_by(NewsSource.category, NewsSource.title)
+    )
     return list(result)
 
 
 async def list_categories(session: AsyncSession) -> list[str]:
     result = await session.scalars(
         select(NewsSource.category)
-        .where(NewsSource.is_active.is_(True))
+        .where(NewsSource.is_active.is_(True), NewsSource.source_id.is_not(None))
         .group_by(NewsSource.category)
         .order_by(NewsSource.category)
     )
@@ -141,7 +171,7 @@ async def list_categories(session: AsyncSession) -> list[str]:
 async def sources_by_category(session: AsyncSession, category: str) -> list[NewsSource]:
     result = await session.scalars(
         select(NewsSource)
-        .where(NewsSource.is_active.is_(True), NewsSource.category == category)
+        .where(NewsSource.is_active.is_(True), NewsSource.source_id.is_not(None), NewsSource.category == category)
         .order_by(NewsSource.title)
     )
     return list(result)
@@ -158,7 +188,7 @@ async def selected_sources(session: AsyncSession, user_id: int) -> list[NewsSour
         return []
     result = await session.scalars(
         select(NewsSource)
-        .where(NewsSource.source_id.in_(ids), NewsSource.is_active.is_(True))
+        .where(NewsSource.source_id.in_(ids), NewsSource.is_active.is_(True), NewsSource.source_id.is_not(None))
         .order_by(NewsSource.category, NewsSource.title)
     )
     found = list(result)
@@ -285,3 +315,58 @@ async def toggle_silent(session: AsyncSession, user: User) -> bool:
 async def scheduled_users(session: AsyncSession) -> list[User]:
     result = await session.scalars(select(User).where(User.schedule_enabled.is_(True), User.timezone.is_not(None)))
     return list(result)
+
+
+async def admin_general_stats(session: AsyncSession) -> dict[str, int]:
+    users_count = await session.scalar(select(func.count(User.id))) or 0
+    digests_count = await session.scalar(select(func.count(DigestHistory.id))) or 0
+    favorite_count = await session.scalar(select(func.count(DigestHistory.id)).where(DigestHistory.is_favorite.is_(True))) or 0
+    positive_count = await session.scalar(select(func.count(DigestHistory.id)).where(DigestHistory.feedback == "positive")) or 0
+    negative_count = await session.scalar(select(func.count(DigestHistory.id)).where(DigestHistory.feedback == "negative")) or 0
+    users_with_sources = await session.scalar(select(func.count(func.distinct(UserSource.user_id)))) or 0
+    subscriptions_count = await session.scalar(select(func.count(UserSource.id))) or 0
+    return {
+        "users_count": users_count,
+        "digests_count": digests_count,
+        "favorite_count": favorite_count,
+        "positive_count": positive_count,
+        "negative_count": negative_count,
+        "users_with_sources": users_with_sources,
+        "subscriptions_count": subscriptions_count,
+    }
+
+
+async def users_page(session: AsyncSession, page: int, per_page: int = 8) -> tuple[list[User], int]:
+    total = await session.scalar(select(func.count(User.id))) or 0
+    result = await session.scalars(
+        select(User)
+        .order_by(User.last_activity_at.desc().nullslast(), User.created_at.desc())
+        .offset(page * per_page)
+        .limit(per_page)
+    )
+    return list(result), total
+
+
+async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
+    return await session.scalar(select(User).where(User.id == user_id))
+
+
+async def admin_user_stats(session: AsyncSession, user_id: int) -> dict[str, int]:
+    digests_count = await session.scalar(select(func.count(DigestHistory.id)).where(DigestHistory.user_id == user_id)) or 0
+    favorite_count = await session.scalar(
+        select(func.count(DigestHistory.id)).where(DigestHistory.user_id == user_id, DigestHistory.is_favorite.is_(True))
+    ) or 0
+    sources_count = await session.scalar(select(func.count(UserSource.id)).where(UserSource.user_id == user_id)) or 0
+    positive_count = await session.scalar(
+        select(func.count(DigestHistory.id)).where(DigestHistory.user_id == user_id, DigestHistory.feedback == "positive")
+    ) or 0
+    negative_count = await session.scalar(
+        select(func.count(DigestHistory.id)).where(DigestHistory.user_id == user_id, DigestHistory.feedback == "negative")
+    ) or 0
+    return {
+        "digests_count": digests_count,
+        "favorite_count": favorite_count,
+        "sources_count": sources_count,
+        "positive_count": positive_count,
+        "negative_count": negative_count,
+    }
