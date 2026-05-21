@@ -60,6 +60,7 @@ class DigestHistory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     refresh_attempts_left: Mapped[int] = mapped_column(Integer, default=2)
+    shorten_attempts_left: Mapped[int] = mapped_column(Integer, default=2)
     feedback: Mapped[str | None] = mapped_column(String(16), nullable=True)
     feedback_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     used_links: Mapped[str | None] = mapped_column(Text, nullable=True)

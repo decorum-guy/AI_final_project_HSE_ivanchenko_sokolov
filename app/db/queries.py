@@ -322,6 +322,12 @@ async def decrement_refresh(session: AsyncSession, digest: DigestHistory) -> Non
     await session.commit()
 
 
+async def decrement_shorten(session: AsyncSession, digest: DigestHistory) -> None:
+    attempts_left = digest.shorten_attempts_left if digest.shorten_attempts_left is not None else 2
+    digest.shorten_attempts_left = max(0, attempts_left - 1)
+    await session.commit()
+
+
 async def save_interests(session: AsyncSession, user: User, text: str) -> None:
     user.interests_text = text.strip()
     await session.commit()

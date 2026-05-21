@@ -150,7 +150,7 @@ class GigaChatDigestClient:
         prompt = self._build_digest_prompt(items, period_title)
         logger.info("Sending digest prompt to GigaChat: items=%s chars=%s", len(items), len(prompt))
         try:
-            answer = await ask_gigachat(prompt, max_tokens=3200, temperature=0.15)
+            answer = await ask_gigachat(prompt, max_tokens=2600, temperature=0.15)
             return postprocess_digest_html(answer)
         except Exception as exc:
             logger.exception("GigaChat digest request failed, using fallback: %s", exc)
@@ -163,6 +163,8 @@ class GigaChatDigestClient:
             f"Период: {period_title}.",
             "",
             "Сформируй дайджест на русском языке только в формате Telegram-compatible HTML.",
+            "Длина ответа: не больше 3300–3600 символов.",
+            "Количество новостей: максимум 7–8 главных новостей.",
             "",
             "Жесткие правила форматирования:",
             "1. Используй только HTML, совместимый с Telegram parse_mode='HTML'.",
@@ -174,8 +176,11 @@ class GigaChatDigestClient:
             "7. Не добавляй второй блок «Новости».",
             "8. Не ставь «Итог» до списка новостей. Итог должен быть только в самом конце.",
             "9. Каждая новость обязательно должна иметь строки «Кратко:», «Почему важно:» и «Источник:».",
-            "10. Не делай новости только из заголовка и ссылки.",
-            "11. Символы <, >, & в обычном тексте не используй вне разрешенных HTML-тегов.",
+            "10. Каждая строка «Кратко» — одно короткое предложение.",
+            "11. Каждая строка «Почему важно» — одно короткое предложение.",
+            "12. Не делай новости только из заголовка и ссылки.",
+            "13. Вводный блок и итог должны быть короткими, без длинных рассуждений.",
+            "14. Символы <, >, & в обычном тексте не используй вне разрешенных HTML-тегов.",
             "",
             "Строгий шаблон ответа:",
             f"<b>📰 Дайджест {period_title}</b>",
@@ -213,6 +218,18 @@ class GigaChatDigestClient:
                 ]
             )
         return "\n".join(lines)
+
+    async def shorten(self, digest_text: str) -> str:
+        prompt = (
+            "Сожми этот дайджест до 3000 символов.\n"
+            "Сохрани Telegram-compatible HTML-разметку, ссылки и 5–7 главных новостей.\n"
+            "Не используй Markdown, ``` и голые URL.\n"
+            "Структура должна быть такой же: заголовок, blockquote, слоган, <b>Новости</b>, новости, <b>Итог</b>.\n"
+            "Каждая новость должна иметь «Кратко:», «Почему важно:», «Источник:».\n\n"
+            f"Дайджест:\n{digest_text}"
+        )
+        answer = await ask_gigachat(prompt, max_tokens=2200, temperature=0.1)
+        return postprocess_digest_html(answer)
 
     def _fallback_digest(self, items: list[NewsItem], period_title: str) -> str:
         if not items:

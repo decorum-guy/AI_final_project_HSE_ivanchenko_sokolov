@@ -34,3 +34,7 @@ async def init_db() -> None:
         existing_source_columns = {row[1] for row in source_columns}
         if "source_id" not in existing_source_columns:
             await conn.execute(text("ALTER TABLE news_sources ADD COLUMN source_id VARCHAR(128)"))
+        digest_columns = await conn.execute(text("PRAGMA table_info(digest_history)"))
+        existing_digest_columns = {row[1] for row in digest_columns}
+        if "shorten_attempts_left" not in existing_digest_columns:
+            await conn.execute(text("ALTER TABLE digest_history ADD COLUMN shorten_attempts_left INTEGER DEFAULT 2"))

@@ -44,3 +44,20 @@ def refresh_confirm(digest_id: int) -> InlineKeyboardMarkup:
     button(kb, text="← Отмена", callback_data=f"refresh:no:{digest_id}")
     kb.adjust(1)
     return kb.as_markup()
+
+
+def long_digest_options(digest_id: int, shorten_attempts_left: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if shorten_attempts_left > 0:
+        button(
+            kb,
+            text=f"🔁 Перегенерировать короче ({shorten_attempts_left})",
+            callback_data=f"digest:shorten:{digest_id}",
+            style="primary",
+        )
+    else:
+        button(kb, text="🔁 Перегенерировать короче (0)", callback_data=f"digest:shorten_empty:{digest_id}")
+    button(kb, text="📄 Получить DOCX", callback_data=f"digest:file:docx:{digest_id}", style="success")
+    button(kb, text="📕 Получить PDF", callback_data=f"digest:file:pdf:{digest_id}", style="success")
+    kb.adjust(1, 2)
+    return kb.as_markup()

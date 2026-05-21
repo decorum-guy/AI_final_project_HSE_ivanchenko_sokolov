@@ -20,7 +20,7 @@ from app.bot.keyboards.admin import (
     admin_users_list,
     user_title,
 )
-from app.bot.keyboards.digest import digest_actions
+from app.bot.keyboards.digest import digest_actions, long_digest_options
 from app.bot.utils import safe_callback_answer, safe_edit_message
 from app.config import get_settings
 from app.core.digest import build_digest
@@ -31,6 +31,11 @@ from app.db.models import NewsSource
 
 logger = logging.getLogger(__name__)
 router = Router()
+SAFE_TELEGRAM_LIMIT = 3800
+LONG_DIGEST_TEXT = (
+    "Дайджест получился слишком объемным для одного сообщения Telegram.\n\n"
+    "Можно перегенерировать короткую версию или получить полный файл."
+)
 
 
 def is_admin(user_id: int) -> bool:
@@ -268,6 +273,13 @@ async def admin_test_period_selected(callback: CallbackQuery) -> None:
         digest = await build_digest(session, user, mode, period)
         text = "<b>🧪 Тестовый дайджест</b>\n\n" + digest.digest_text
         keyboard = digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite)
-    edited = await safe_edit_message(loading or callback.message, text, reply_markup=keyboard, parse_mode="HTML")
+        if len(text) > SAFE_TELEGRAM_LIMIT:
+            attempts = digest.shorten_attempts_left if digest.shorten_attempts_left is not None else 2
+            keyboard = long_digest_options(digest.id, attempts)
+            text = LONG_DIGEST_TEXT
+            parse_mode = None
+        else:
+            parse_mode = "HTML"
+    edited = await safe_edit_message(loading or callback.message, text, reply_markup=keyboard, parse_mode=parse_mode)
     if not edited:
-        await callback.message.answer(text, reply_markup=keyboard, disable_web_page_preview=True, parse_mode="HTML")
+        await callback.message.answer(text, reply_markup=keyboard, disable_web_page_preview=True, parse_mode=parse_mode)
