@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from app.config import get_settings
+from app.core.gigachat_client import ask_gigachat
 from app.core.rss import NewsItem
 from app.db.models import NewsSource
 
@@ -48,12 +49,68 @@ def filter_by_interests(items: list[NewsItem], interests_text: str | None) -> li
 
 
 async def recommend_sources(interests_text: str, sources: list[NewsSource]) -> list[SourceRecommendation]:
-    if get_settings().gigachat_credentials:
-        prompt = _build_recommendation_prompt(interests_text, sources)
-        logger.info("GigaChat recommendation prompt prepared, chars=%s", len(prompt))
-        # Реальный вызов GigaChat можно подключить здесь. Для MVP fallback остается обязательным,
-        # чтобы сценарий работал без внешнего API или при ошибке SDK.
-    return fallback_recommend_sources(interests_text, sources)
+    active_sources = [source for source in sources if source.is_active]
+    valid_source_ids = {source.source_id for source in active_sources}
+    if get_settings().gigachat_credentials and active_sources:
+        prompt = _build_recommendation_prompt(interests_text, active_sources)
+        logger.info("Sending recommendation prompt to GigaChat: sources=%s chars=%s", len(active_sources), len(prompt))
+        try:
+            answer = await ask_gigachat(prompt, max_tokens=900, temperature=0.1)
+            recommendations = _parse_recommendation_response(answer, valid_source_ids)
+            if recommendations:
+                if len(recommendations) < 5:
+                    existing = {item.source_id for item in recommendations}
+                    for item in fallback_recommend_sources(interests_text, active_sources):
+                        if item.source_id in existing:
+                            continue
+                        recommendations.append(item)
+                        existing.add(item.source_id)
+                        if len(recommendations) >= 5:
+                            break
+                logger.info("GigaChat recommended %s sources", len(recommendations))
+                return recommendations
+            logger.warning("GigaChat recommendation response did not contain valid source_id values")
+        except Exception as exc:
+            logger.exception("GigaChat recommendation request failed, using fallback: %s", exc)
+    return fallback_recommend_sources(interests_text, active_sources)
+
+
+def _parse_recommendation_response(answer: str, valid_source_ids: set[str]) -> list[SourceRecommendation]:
+    text = answer.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            logger.warning("Cannot parse GigaChat recommendation JSON: %s", answer[:500])
+            return []
+        try:
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            logger.warning("Cannot parse extracted GigaChat recommendation JSON: %s", answer[:500])
+            return []
+
+    raw_items = payload.get("recommendations", []) if isinstance(payload, dict) else []
+    recommendations: list[SourceRecommendation] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        source_id = str(item.get("source_id", "")).strip()
+        if source_id not in valid_source_ids or source_id in seen:
+            logger.warning("Ignoring invalid GigaChat source_id recommendation: %s", source_id)
+            continue
+        reason = str(item.get("reason", "")).strip() or "Подходит по интересам пользователя."
+        recommendations.append(SourceRecommendation(source_id=source_id, reason=reason))
+        seen.add(source_id)
+        if len(recommendations) >= 10:
+            break
+
+    return recommendations[:10]
 
 
 def fallback_recommend_sources(interests_text: str, sources: list[NewsSource]) -> list[SourceRecommendation]:

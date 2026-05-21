@@ -11,11 +11,37 @@ from app.db.database import async_session
 router = Router()
 PENDING_SCHEDULE: dict[int, tuple[str, str]] = {}
 
+SCHEDULE_TITLES = {
+    "morning": "каждое утро",
+    "evening": "каждый вечер",
+    "weekly": "каждый понедельник",
+}
+
+
+def _schedule_setting_text(user) -> str:
+    if not user.schedule_enabled or not user.schedule_type or not user.schedule_time:
+        return "отключено"
+
+    title = SCHEDULE_TITLES.get(user.schedule_type, user.schedule_type)
+    timezone = f", {user.timezone}" if user.timezone else ""
+    return f"{title} в {user.schedule_time}{timezone}"
+
+
+def _schedule_screen_text(user, prefix: str | None = None) -> str:
+    lines = []
+    if prefix:
+        lines.extend([prefix, ""])
+    lines.append("Когда присылать дайджест?")
+    lines.append(f"Текущая настройка: {_schedule_setting_text(user)}")
+    return "\n".join(lines)
+
 
 @router.callback_query(F.data == "schedule:show")
 async def schedule_screen(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
-    await safe_edit_message(callback.message, "Когда присылать дайджест?", reply_markup=schedule_menu())
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+    await safe_edit_message(callback.message, _schedule_screen_text(user), reply_markup=schedule_menu())
 
 
 @router.callback_query(F.data.startswith("schedule:type:"))
@@ -41,8 +67,9 @@ async def save_time(callback: CallbackQuery) -> None:
             await safe_edit_message(callback.message, "Выберите ваш город или ближайший часовой пояс:", reply_markup=timezone_menu("schedule"))
             return
         await queries.save_schedule(session, user, schedule_type, schedule_time)
+        await session.refresh(user)
         await reschedule_user(user.telegram_id)
-    await safe_edit_message(callback.message, "Расписание дайджестов сохранено.", reply_markup=schedule_menu())
+    await safe_edit_message(callback.message, _schedule_screen_text(user, "Расписание дайджестов сохранено."), reply_markup=schedule_menu())
 
 
 @router.callback_query(F.data == "schedule:disable")
@@ -51,8 +78,9 @@ async def disable(callback: CallbackQuery) -> None:
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         await queries.disable_schedule(session, user)
+        await session.refresh(user)
         await reschedule_user(user.telegram_id)
-    await safe_edit_message(callback.message, "Рассылка дайджестов отключена.", reply_markup=schedule_menu())
+    await safe_edit_message(callback.message, _schedule_screen_text(user, "Рассылка дайджестов отключена."), reply_markup=schedule_menu())
 
 
 @router.callback_query(F.data.startswith("tz:schedule:"))
@@ -65,5 +93,6 @@ async def schedule_timezone(callback: CallbackQuery) -> None:
         pending = PENDING_SCHEDULE.pop(user.telegram_id, None)
         if pending:
             await queries.save_schedule(session, user, pending[0], pending[1])
+        await session.refresh(user)
         await reschedule_user(user.telegram_id)
-    await safe_edit_message(callback.message, "Часовой пояс и расписание сохранены.", reply_markup=schedule_menu())
+    await safe_edit_message(callback.message, _schedule_screen_text(user, "Часовой пояс и расписание сохранены."), reply_markup=schedule_menu())

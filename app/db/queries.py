@@ -91,7 +91,10 @@ def _read_sources_rows() -> list[dict]:
 
 async def sync_sources(session: AsyncSession) -> None:
     """Read sources.xlsx without rewriting it and upsert sources into SQLite."""
-    for row in _read_sources_rows():
+    rows = _read_sources_rows()
+    current_source_ids = {row["source_id"] for row in rows}
+
+    for row in rows:
         source = await session.scalar(select(NewsSource).where(NewsSource.source_id == row["source_id"]))
         if not source:
             source = NewsSource(**row)
@@ -102,6 +105,15 @@ async def sync_sources(session: AsyncSession) -> None:
         source.description = row["description"]
         source.rss_url = row["rss_url"]
         source.is_active = row["is_active"]
+
+    stale_sources = await session.scalars(select(NewsSource).where(NewsSource.source_id.not_in(current_source_ids)))
+    stale_count = 0
+    for source in stale_sources:
+        if source.is_active:
+            source.is_active = False
+            stale_count += 1
+    if stale_count:
+        logger.info("Deactivated %s sources missing from sources.xlsx", stale_count)
     await session.commit()
 
 

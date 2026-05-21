@@ -77,6 +77,7 @@ async def recommend_interests_sources(callback: CallbackQuery, state: FSMContext
                 reply_markup=interests_after_save(),
             )
             return
+        await queries.sync_sources(session)
         sources = await queries.list_sources(session)
         recommendations = await recommend_sources(user.interests_text, sources)
         source_by_id = {source.source_id: source for source in sources}
