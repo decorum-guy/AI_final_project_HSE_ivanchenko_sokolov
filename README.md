@@ -346,6 +346,8 @@ copy .env.example .env
 
 ```env
 BOT_TOKEN=
+BOT_USE_PROXY=false
+BOT_PROXY_URL=
 GIGACHAT_CREDENTIALS=
 DATABASE_URL=sqlite+aiosqlite:///./bot.db
 ADMIN_ID=
@@ -357,12 +359,49 @@ LOG_LEVEL=INFO
 | Переменная | Назначение |
 |---|---|
 | `BOT_TOKEN` | токен Telegram-бота от BotFather |
+| `BOT_USE_PROXY` | включает запуск Telegram Bot API через proxy |
+| `BOT_PROXY_URL` | HTTP или SOCKS5 proxy для polling |
 | `GIGACHAT_CREDENTIALS` | данные для подключения к GigaChat |
 | `DATABASE_URL` | строка подключения к базе данных |
 | `ADMIN_ID` | Telegram ID администратора |
 | `LOG_LEVEL` | уровень логирования |
 
 Если `GIGACHAT_CREDENTIALS` не указан, бот может использовать тестовую заглушку для генерации дайджеста.
+
+---
+
+## Запуск через proxy
+
+По умолчанию бот запускается без proxy:
+
+```env
+BOT_USE_PROXY=false
+BOT_PROXY_URL=
+```
+
+Proxy-режим добавлен для серверов, где прямой доступ к Telegram Bot API ограничен, нестабилен или сильно замедлен. Бот поддерживает HTTP и SOCKS5 proxy.
+
+Примеры:
+
+```env
+BOT_USE_PROXY=true
+BOT_PROXY_URL=socks5://login:password@host:port
+BOT_PROXY_URL=socks5://host:port
+BOT_PROXY_URL=http://login:password@host:port
+BOT_PROXY_URL=http://host:port
+```
+
+Если `BOT_USE_PROXY=false` или `BOT_PROXY_URL` пустой, бот создает обычную сессию без proxy. В логах при старте будет:
+
+```text
+Bot started without proxy
+```
+
+Если proxy включен, пароль в логах не показывается:
+
+```text
+Bot started with proxy: socks5://***
+```
 
 ---
 
