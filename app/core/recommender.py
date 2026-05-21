@@ -13,6 +13,7 @@ from app.db.models import NewsSource
 
 logger = logging.getLogger(__name__)
 POPULAR_CATEGORIES = {"it", "бизнес", "технологии", "наука", "международные"}
+MIN_VALID_GIGACHAT_RECOMMENDATIONS = 3
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,30 @@ def filter_by_interests(items: list[NewsItem], interests_text: str | None) -> li
     return ranked
 
 
+def _recommendation_response_format() -> dict:
+    return {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "recommendations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source_id": {"type": "string"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["source_id", "reason"],
+                    },
+                },
+            },
+            "required": ["recommendations"],
+        },
+        "strict": True,
+    }
+
+
 async def recommend_sources(interests_text: str, sources: list[NewsSource]) -> list[SourceRecommendation]:
     active_sources = [source for source in sources if source.is_active]
     valid_source_ids = {source.source_id for source in active_sources}
@@ -55,9 +80,14 @@ async def recommend_sources(interests_text: str, sources: list[NewsSource]) -> l
         prompt = _build_recommendation_prompt(interests_text, active_sources)
         logger.info("Sending recommendation prompt to GigaChat: sources=%s chars=%s", len(active_sources), len(prompt))
         try:
-            answer = await ask_gigachat(prompt, max_tokens=900, temperature=0.1)
+            answer = await ask_gigachat(
+                prompt,
+                max_tokens=1500,
+                temperature=0.1,
+                response_format=_recommendation_response_format(),
+            )
             recommendations = _parse_recommendation_response(answer, valid_source_ids)
-            if recommendations:
+            if len(recommendations) >= MIN_VALID_GIGACHAT_RECOMMENDATIONS:
                 if len(recommendations) < 5:
                     existing = {item.source_id for item in recommendations}
                     for item in fallback_recommend_sources(interests_text, active_sources):
@@ -69,30 +99,54 @@ async def recommend_sources(interests_text: str, sources: list[NewsSource]) -> l
                             break
                 logger.info("GigaChat recommended %s sources", len(recommendations))
                 return recommendations
-            logger.warning("GigaChat recommendation response did not contain valid source_id values")
+            logger.warning(
+                "GigaChat recommendation response has too few valid source_id values: %s",
+                len(recommendations),
+            )
         except Exception as exc:
             logger.exception("GigaChat recommendation request failed, using fallback: %s", exc)
     return fallback_recommend_sources(interests_text, active_sources)
 
 
-def _parse_recommendation_response(answer: str, valid_source_ids: set[str]) -> list[SourceRecommendation]:
-    text = answer.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
+def extract_json_object(raw_text: str) -> dict | None:
+    text = raw_text.strip()
+    text = re.sub(r"^```(?:json|JSON)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
 
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        logger.warning("Cannot find JSON object in GigaChat response. raw_preview=%r", raw_text[:4000])
+        return None
+
+    candidate = text[start : end + 1]
     try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            logger.warning("Cannot parse GigaChat recommendation JSON: %s", answer[:500])
-            return []
-        try:
-            payload = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            logger.warning("Cannot parse extracted GigaChat recommendation JSON: %s", answer[:500])
-            return []
+        payload = json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "Cannot parse GigaChat recommendation JSON. raw_preview=%r candidate=%r error=%s",
+            raw_text[:4000],
+            candidate[:4000],
+            exc,
+        )
+        return None
+
+    if not isinstance(payload, dict):
+        logger.warning(
+            "GigaChat recommendation JSON is not an object. raw_preview=%r candidate=%r",
+            raw_text[:4000],
+            candidate[:4000],
+        )
+        return None
+
+    return payload
+
+
+def _parse_recommendation_response(answer: str, valid_source_ids: set[str]) -> list[SourceRecommendation]:
+    payload = extract_json_object(answer)
+    if payload is None:
+        return []
 
     raw_items = payload.get("recommendations", []) if isinstance(payload, dict) else []
     recommendations: list[SourceRecommendation] = []
@@ -175,6 +229,10 @@ def _build_recommendation_prompt(interests_text: str, sources: list[NewsSource])
         "2. Не придумывай новые источники.\n"
         "3. Не меняй source_id.\n"
         "4. Учитывай category, title и description.\n"
-        "5. Верни ответ строго в JSON.\n\n"
+        "5. Верни только валидный JSON.\n"
+        "6. Не используй Markdown.\n"
+        "7. Не используй ```json и не оборачивай ответ в code block.\n"
+        "8. Не добавляй пояснения до или после JSON.\n"
+        "9. Ответ должен начинаться с { и заканчиваться }.\n\n"
         f"Формат JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
     )

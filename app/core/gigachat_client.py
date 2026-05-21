@@ -34,6 +34,7 @@ async def ask_gigachat(
     max_tokens: int = 1200,
     temperature: float = 0.2,
     model: str | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> str:
     settings = get_settings()
     if not settings.gigachat_credentials:
@@ -42,12 +43,16 @@ async def ask_gigachat(
     from gigachat import GigaChat
     from gigachat.models import Chat, Messages, MessagesRole
 
-    payload = Chat(
-        model=model,
-        messages=[Messages(role=MessagesRole.USER, content=prompt)],
-        max_tokens=max_tokens,
-        temperature=temperature,
-    )
+    payload_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [Messages(role=MessagesRole.USER, content=prompt)],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if response_format is not None:
+        payload_kwargs["response_format"] = response_format
+
+    payload = Chat(**payload_kwargs)
 
     async with GigaChat(
         credentials=settings.gigachat_credentials,
