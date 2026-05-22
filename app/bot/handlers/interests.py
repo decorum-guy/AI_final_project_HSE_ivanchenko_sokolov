@@ -30,14 +30,15 @@ class InterestState(StatesGroup):
 
 
 def _interests_text(current: str | None, keywords: str | None) -> str:
-    normalized = keywords or "Пока не нормализованы"
+    current_text = escape(current or "Пока не указаны")
+    normalized = escape(keywords or "Пока не нормализованы")
     return (
         "🎯 Мои интересы\n\n"
         "Здесь можно указать темы, которые вам интересны.\n"
         "На основе интересов бот подберет источники, а нормализованные слова помогут точнее ранжировать новости.\n\n"
-        "Текущие интересы:\n"
-        f"{current or 'Пока не указаны'}\n\n"
-        "Нормализованные слова:\n"
+        "<b>Текущие интересы:</b>\n"
+        f"{current_text}\n\n"
+        "<b>Нормализованные слова:</b>\n"
         f"{normalized}"
     )
 
@@ -60,7 +61,7 @@ async def interests_screen(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
-    await safe_edit_message(callback.message, _interests_text(user.interests_text, user.interests_keywords), reply_markup=interests_menu())
+    await safe_edit_message(callback.message, _interests_text(user.interests_text, user.interests_keywords), reply_markup=interests_menu(), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "interests:edit")
