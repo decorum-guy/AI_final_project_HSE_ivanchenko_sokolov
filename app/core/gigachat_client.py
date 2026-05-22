@@ -85,10 +85,21 @@ async def ask_chatgpt(
     max_tokens: int = 1200,
     temperature: float = 0.2,
     model: str | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> str:
     settings = get_settings()
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is empty")
+
+    request_payload: dict[str, Any] = {
+        "model": model or settings.openai_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    openai_response_format = _openai_response_format(response_format)
+    if openai_response_format:
+        request_payload["response_format"] = openai_response_format
 
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(
@@ -97,12 +108,7 @@ async def ask_chatgpt(
                 "Authorization": f"Bearer {settings.openai_api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": model or settings.openai_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
+            json=request_payload,
         )
         response.raise_for_status()
         payload = response.json()
@@ -116,6 +122,26 @@ async def ask_chatgpt(
     return str(answer).strip()
 
 
+def _openai_response_format(response_format: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not response_format:
+        return None
+    if response_format.get("type") == "json_schema":
+        schema = response_format.get("schema")
+        if not isinstance(schema, dict):
+            return None
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": response_format.get("name") or "structured_response",
+                "schema": schema,
+                "strict": bool(response_format.get("strict", True)),
+            },
+        }
+    if response_format.get("type") == "json_object":
+        return {"type": "json_object"}
+    return None
+
+
 async def ask_llm(
     prompt: str,
     *,
@@ -127,7 +153,13 @@ async def ask_llm(
 ) -> str:
     selected = (provider or get_settings().ai_provider or "gigachat").lower()
     if selected == "chatgpt":
-        return await ask_chatgpt(prompt, max_tokens=max_tokens, temperature=temperature, model=model)
+        return await ask_chatgpt(
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            model=model,
+            response_format=response_format,
+        )
     return await ask_gigachat(
         prompt,
         max_tokens=max_tokens,

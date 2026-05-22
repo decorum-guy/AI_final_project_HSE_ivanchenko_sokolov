@@ -52,6 +52,7 @@ def filter_by_interests(items: list[NewsItem], interests_text: str | None) -> li
 def _recommendation_response_format() -> dict:
     return {
         "type": "json_schema",
+        "name": "source_recommendations",
         "schema": {
             "type": "object",
             "properties": {
@@ -64,10 +65,12 @@ def _recommendation_response_format() -> dict:
                             "reason": {"type": "string"},
                         },
                         "required": ["source_id", "reason"],
+                        "additionalProperties": False,
                     },
                 },
             },
             "required": ["recommendations"],
+            "additionalProperties": False,
         },
         "strict": True,
     }
