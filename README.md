@@ -99,7 +99,9 @@
 
 В настройках бота пользователь может выбрать ИИ-провайдера: `GigaChat` или `ChatGPT`. Это именно выбор провайдера, а не конкретной модели.
 
-Конкретная модель ChatGPT задается администратором через `.env` в переменной `OPENAI_MODEL`. Сейчас основной вариант для проекта — `gpt-5.4-nano`: он дешевле по output-токенам и лучше подходит для учебного MVP с частыми тестами. `gpt-5.4-mini` оставлен как резервный вариант на случай, если качество `nano` окажется недостаточным, но по умолчанию не используется, потому что его output ощутимо дороже.
+Конкретная модель ChatGPT задается администратором через `.env`. В проекте подключен режим data sharing, поэтому доступны бесплатные лимиты: до 250 000 токенов в сутки для `gpt-5.4` и до 2 500 000 токенов в сутки для `gpt-5.4-mini`. Есть и другие модели, но для MVP выбраны самые сильные варианты в этих двух классах.
+
+Основная модель — `gpt-5.4`. Чтобы не упереться в суточный лимит, бот ведет локальный счетчик токенов OpenAI в `logs/openai_usage.json`. Если расход базовой модели достигает порога `OPENAI_DAILY_TOKEN_LIMIT`, до следующего дня новые ChatGPT-запросы автоматически переводятся на `OPENAI_FALLBACK_MODEL`, сейчас это `gpt-5.4-mini`.
 
 Модели ИИ не являются идеальными: они могут ошибаться в фактах, выбирать неидеальные акценты, нарушать формат или возвращать лишний текст. Поэтому в проекте есть fallback-логика, лимиты на входные новости, постобработка HTML и защита от слишком длинных сообщений Telegram.
 
@@ -398,7 +400,9 @@ BOT_USE_PROXY=false
 BOT_PROXY_URL=
 GIGACHAT_CREDENTIALS=
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.4-nano
+OPENAI_MODEL=gpt-5.4
+OPENAI_FALLBACK_MODEL=gpt-5.4-mini
+OPENAI_DAILY_TOKEN_LIMIT=200000
 OPENAI_BASE_URL=https://api.openai.com/v1
 AI_PROVIDER=gigachat
 DATABASE_URL=sqlite+aiosqlite:///./bot.db
@@ -415,7 +419,9 @@ LOG_LEVEL=INFO
 | `BOT_PROXY_URL` | HTTP или SOCKS5 proxy для polling |
 | `GIGACHAT_CREDENTIALS` | данные для подключения к GigaChat |
 | `OPENAI_API_KEY` | ключ OpenAI API для режима ChatGPT |
-| `OPENAI_MODEL` | модель ChatGPT из `.env`, по умолчанию `gpt-5.4-nano`; для качества можно поставить `gpt-5.4-mini` |
+| `OPENAI_MODEL` | базовая модель ChatGPT, по умолчанию `gpt-5.4` |
+| `OPENAI_FALLBACK_MODEL` | резервная модель после достижения дневного лимита, по умолчанию `gpt-5.4-mini` |
+| `OPENAI_DAILY_TOKEN_LIMIT` | локальный дневной порог токенов для переключения с базовой модели на резервную, по умолчанию `200000` |
 | `OPENAI_BASE_URL` | базовый URL OpenAI-compatible API |
 | `AI_PROVIDER` | ИИ-провайдер по умолчанию: `gigachat` или `chatgpt` |
 | `DATABASE_URL` | строка подключения к базе данных |
@@ -477,6 +483,16 @@ python scripts/test_gigachat.py
 python scripts/test_gigachat.py --prompt "Ответь коротко, что подключение работает"
 python scripts/test_gigachat.py --model GigaChat
 ```
+
+## Проверка ChatGPT-моделей
+
+Для проверки, что `OPENAI_MODEL` и `OPENAI_FALLBACK_MODEL` реально доступны и тарифицируются как ожидается, есть микро-тест:
+
+```bash
+python scripts/test_openai_models.py
+```
+
+Скрипт берет `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_FALLBACK_MODEL` и `OPENAI_BASE_URL` из `.env`, делает по одному короткому запросу к каждой модели и печатает ответы. Его удобно запускать перед демонстрацией или после изменения модели в `.env`.
 
 Если переменная `GIGACHAT_CREDENTIALS` пустая или запрос не прошел, скрипт выведет понятную ошибку.
 

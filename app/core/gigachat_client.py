@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime
 from html import escape
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,6 +24,7 @@ SLOGAN_PLACEHOLDERS = (
     "Короткий слоган дайджеста в одну строку.",
     "Конкретный короткий слоган по темам новостей.",
 )
+OPENAI_USAGE_PATH = Path("logs/openai_usage.json")
 
 
 def _extract_answer(response: Any) -> str:
@@ -91,8 +94,9 @@ async def ask_chatgpt(
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is empty")
 
+    selected_model = model or _select_openai_model()
     request_payload: dict[str, Any] = {
-        "model": model or settings.openai_model,
+        "model": selected_model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -112,6 +116,7 @@ async def ask_chatgpt(
         )
         response.raise_for_status()
         payload = response.json()
+    _record_openai_usage(payload, selected_model)
 
     choices = payload.get("choices") or []
     if not choices:
@@ -120,6 +125,71 @@ async def ask_chatgpt(
     if not answer:
         raise RuntimeError("ChatGPT returned an empty content")
     return str(answer).strip()
+
+
+def _today_key() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
+def _read_openai_usage() -> dict[str, Any]:
+    if not OPENAI_USAGE_PATH.exists():
+        return {"date": _today_key(), "total_tokens": 0, "models": {}}
+    try:
+        with OPENAI_USAGE_PATH.open("r", encoding="utf-8") as file:
+            payload = json.load(file)
+    except Exception:
+        logger.warning("Cannot read OpenAI usage file, starting a new daily counter", exc_info=True)
+        return {"date": _today_key(), "total_tokens": 0, "models": {}}
+    if payload.get("date") != _today_key():
+        return {"date": _today_key(), "total_tokens": 0, "models": {}}
+    payload.setdefault("total_tokens", 0)
+    payload.setdefault("models", {})
+    return payload
+
+
+def _write_openai_usage(payload: dict[str, Any]) -> None:
+    try:
+        OPENAI_USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with OPENAI_USAGE_PATH.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+    except Exception:
+        logger.warning("Cannot write OpenAI usage file", exc_info=True)
+
+
+def _select_openai_model() -> str:
+    settings = get_settings()
+    usage = _read_openai_usage()
+    used_tokens = int(usage.get("total_tokens") or 0)
+    if settings.openai_daily_token_limit > 0 and used_tokens >= settings.openai_daily_token_limit:
+        logger.info(
+            "OpenAI daily token limit reached: used=%s limit=%s, switching model from %s to %s",
+            used_tokens,
+            settings.openai_daily_token_limit,
+            settings.openai_model,
+            settings.openai_fallback_model,
+        )
+        return settings.openai_fallback_model
+    return settings.openai_model
+
+
+def _record_openai_usage(payload: dict[str, Any], model: str) -> None:
+    usage = payload.get("usage") or {}
+    total_tokens = int(usage.get("total_tokens") or 0)
+    if total_tokens <= 0:
+        logger.debug("OpenAI response has no usage.total_tokens, usage=%s", usage)
+        return
+
+    daily_usage = _read_openai_usage()
+    daily_usage["total_tokens"] = int(daily_usage.get("total_tokens") or 0) + total_tokens
+    models = daily_usage.setdefault("models", {})
+    models[model] = int(models.get(model) or 0) + total_tokens
+    _write_openai_usage(daily_usage)
+    logger.info(
+        "OpenAI usage recorded: model=%s request_tokens=%s daily_tokens=%s",
+        model,
+        total_tokens,
+        daily_usage["total_tokens"],
+    )
 
 
 def _openai_response_format(response_format: dict[str, Any] | None) -> dict[str, Any] | None:
