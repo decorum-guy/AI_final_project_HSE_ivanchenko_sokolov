@@ -24,12 +24,20 @@ def _context_back_callback(context: str) -> str:
     return "menu"
 
 
-async def _categories_keyboard(context: str):
+async def _categories_keyboard(context: str, user_id: int | None = None):
     async with async_session() as session:
         categories = await queries.list_categories(session)
+        selected = await queries.selected_source_ids(session, user_id) if user_id else set()
+        category_stats = []
+        for category in categories:
+            sources = await queries.sources_by_category(session, category)
+            selected_count = sum(1 for source in sources if source.source_id in selected)
+            category_stats.append((category, selected_count, len(sources)))
+
     kb = InlineKeyboardBuilder()
-    for index, category in enumerate(categories):
-        button(kb, text=category, callback_data=f"sources:cat:{context}:{index}", style="primary")
+    for index, (category, selected_count, total_count) in enumerate(category_stats):
+        label = f"{category} ({selected_count}/{total_count})" if user_id else category
+        button(kb, text=label, callback_data=f"sources:cat:{context}:{index}", style="primary")
     button(kb, text="← Назад", callback_data=_context_back_callback(context))
     category_rows = [2] * (len(categories) // 2)
     if len(categories) % 2:
@@ -58,7 +66,6 @@ async def _sources_keyboard(user_id: int, context: str, category_index: int, cat
             kb,
             text=f"{mark} {source.title}",
             callback_data=f"sources:toggle:{context}:{category_index}:{source.source_id}",
-            style="success" if is_selected else None,
         )
     button(kb, text="✅ Готово", callback_data=f"sources:done:{context}", style="success")
     button(kb, text="← Назад", callback_data=f"sources:choose:{context}")
@@ -70,9 +77,13 @@ async def _sources_keyboard(user_id: int, context: str, category_index: int, cat
 
 
 async def _open_categories(callback: CallbackQuery, context: str) -> None:
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
     await callback.message.edit_text(
-        "📡 Выбор источников\n\nСначала выберите категорию:",
-        reply_markup=await _categories_keyboard(context),
+        "📡 Выбор источников\n\n"
+        "Рядом с категорией показано, сколько источников выбрано: X/Y.\n\n"
+        "Сначала выберите категорию:",
+        reply_markup=await _categories_keyboard(context, user.id),
     )
     await safe_callback_answer(callback)
 
@@ -102,7 +113,10 @@ async def category_screen(callback: CallbackQuery) -> None:
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
     await callback.message.edit_text(
-        f"📡 {category}\n\nВыберите источники для дайджеста.\nНажмите на источник, чтобы добавить или убрать его.",
+        f"📡 {category}\n\n"
+        "Выберите источники для дайджеста.\n"
+        "Нажмите на источник, чтобы добавить или убрать его.\n\n"
+        "✅ — источник выбран, ☐ — источник не выбран.",
         reply_markup=await _sources_keyboard(user.id, context, category_index, category),
     )
 
