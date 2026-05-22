@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DigestHistory, NewsSource, User, UserSource
@@ -399,6 +399,12 @@ async def admin_general_stats(session: AsyncSession) -> dict[str, int]:
         "users_with_sources": users_with_sources,
         "subscriptions_count": subscriptions_count,
     }
+
+
+async def clear_digest_history(session: AsyncSession) -> int:
+    result = await session.execute(delete(DigestHistory))
+    await session.commit()
+    return result.rowcount or 0
 
 
 async def users_page(session: AsyncSession, page: int, per_page: int = 8) -> tuple[list[User], int]:

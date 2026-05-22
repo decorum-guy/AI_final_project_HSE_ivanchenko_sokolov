@@ -14,8 +14,9 @@ def admin_menu() -> InlineKeyboardMarkup:
     button(kb, text="♻️ Перезагрузить источники", callback_data="admin:reload", style="primary")
     button(kb, text="🧪 Тестовый дайджест", callback_data="admin:test", style="success")
     button(kb, text="📦 Тест длинного дайджеста", callback_data="admin:long", style="success")
+    button(kb, text="🧹 Очистить истории", callback_data="admin:history:clear", style="danger")
     button(kb, text="← Назад", callback_data="menu")
-    kb.adjust(2, 1, 1, 1, 1)
+    kb.adjust(2, 1, 1, 1, 1, 1)
     return kb.as_markup()
 
 
@@ -31,6 +32,14 @@ def admin_stats_menu() -> InlineKeyboardMarkup:
 def admin_back(target: str = "admin:menu") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     button(kb, text="← Назад", callback_data=target)
+    return kb.as_markup()
+
+
+def admin_clear_history_confirm() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button(kb, text="✅ Да, очистить", callback_data="admin:history:clear:confirm", style="danger")
+    button(kb, text="← Отмена", callback_data="admin:menu")
+    kb.adjust(1)
     return kb.as_markup()
 
 

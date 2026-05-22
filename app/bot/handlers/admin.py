@@ -13,6 +13,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.keyboards.admin import (
     admin_back,
+    admin_clear_history_confirm,
     admin_long_mode,
     admin_long_period,
     admin_menu,
@@ -227,6 +228,36 @@ async def admin_reload_sources(callback: CallbackQuery) -> None:
     )
     await callback.message.edit_text(text, reply_markup=admin_back("admin:menu"))
     await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data == "admin:history:clear")
+async def admin_clear_history_prompt(callback: CallbackQuery) -> None:
+    if not await _ensure_admin(callback):
+        return
+    await safe_callback_answer(callback)
+    await safe_edit_message(
+        callback.message,
+        "🧹 Очистка историй дайджестов\n\n"
+        "Будут удалены только сохраненные дайджесты всех пользователей: история, избранное и оценки к дайджестам.\n\n"
+        "Интересы, выбранные источники, расписание и настройки пользователей не изменятся.",
+        reply_markup=admin_clear_history_confirm(),
+    )
+
+
+@router.callback_query(F.data == "admin:history:clear:confirm")
+async def admin_clear_history_confirmed(callback: CallbackQuery) -> None:
+    if not await _ensure_admin(callback):
+        return
+    await safe_callback_answer(callback, "Истории очищены")
+    async with async_session() as session:
+        deleted_count = await queries.clear_digest_history(session)
+    await safe_edit_message(
+        callback.message,
+        "🧹 Истории дайджестов очищены\n\n"
+        f"Удалено записей: {deleted_count}\n\n"
+        "Интересы и пользовательские настройки не изменялись.",
+        reply_markup=admin_back("admin:menu"),
+    )
 
 
 @router.callback_query(F.data == "admin:test")
