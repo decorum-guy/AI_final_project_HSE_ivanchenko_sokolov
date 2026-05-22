@@ -96,6 +96,12 @@ async def edit_interests_text(callback: CallbackQuery, state: FSMContext) -> Non
 @router.message(InterestState.waiting_text)
 async def save_interests_text(message: Message, state: FSMContext) -> None:
     raw_text = message.text or ""
+
+    status_message = await message.answer(
+        "🤖 Анализирую интересы и выделяю ключевые темы...\n\n"
+        "Это может занять несколько секунд."
+    )
+
     async with async_session() as session:
         user = await queries.get_or_create_user(
             session,
@@ -106,15 +112,28 @@ async def save_interests_text(message: Message, state: FSMContext) -> None:
         )
         keywords = await normalize_interests(raw_text, user.llm_provider)
         await queries.save_interests(session, user, raw_text, keywords)
+
     await state.clear()
-    await message.answer(
+
+    final_text = (
         "Интересы сохранены.\n\n"
         f"Вы ввели:\n{raw_text.strip() or 'Пусто'}\n\n"
-        "ИИ нормализовал в слова:\n"
+        "Получились такие ключевые темы:\n"
         f"{keywords_text(keywords) or 'Не удалось выделить слова'}\n\n"
-        "Эти слова можно отредактировать вручную.",
+        "Их можно отредактировать вручную."
+    )
+
+    edited = await safe_edit_message(
+        status_message,
+        final_text,
         reply_markup=interests_after_save(),
     )
+
+    if not edited:
+        await message.answer(
+            final_text,
+            reply_markup=interests_after_save(),
+        )
 
 
 @router.callback_query(F.data == "interests:keywords")
