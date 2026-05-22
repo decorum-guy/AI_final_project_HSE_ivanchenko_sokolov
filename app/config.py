@@ -8,13 +8,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 load_dotenv()
 
 
+OPENAI_MODEL_CHOICES = ("gpt-5.4-mini", "gpt-5.4-nano")
+
+
 class Settings(BaseSettings):
     bot_token: str = ""
     bot_use_proxy: bool = False
     bot_proxy_url: str | None = None
     gigachat_credentials: str | None = None
     openai_api_key: str | None = None
-    openai_model: str = "gpt-5.4-mini"
+    openai_model: str = "gpt-5.4-nano"
     openai_base_url: str = "https://api.openai.com/v1"
     ai_provider: str = "gigachat"
     database_url: str = "sqlite+aiosqlite:///./bot.db"
@@ -49,6 +52,12 @@ class Settings(BaseSettings):
     def normalize_ai_provider(cls, value):
         value = (value or "gigachat").strip().lower()
         return value if value in {"gigachat", "chatgpt"} else "gigachat"
+
+    @field_validator("openai_model", mode="before")
+    @classmethod
+    def normalize_openai_model(cls, value):
+        value = (value or "gpt-5.4-nano").strip()
+        return value if value in OPENAI_MODEL_CHOICES else "gpt-5.4-nano"
 
     @field_validator("bot_use_proxy", mode="before")
     @classmethod

@@ -383,9 +383,9 @@ LOG_LEVEL=INFO
 | `BOT_PROXY_URL` | HTTP или SOCKS5 proxy для polling |
 | `GIGACHAT_CREDENTIALS` | данные для подключения к GigaChat |
 | `OPENAI_API_KEY` | ключ OpenAI API для режима ChatGPT |
-| `OPENAI_MODEL` | модель ChatGPT, например `gpt-5.4-mini` или `gpt-5.4-nano` |
+| `OPENAI_MODEL` | модель ChatGPT из `.env`, по умолчанию `gpt-5.4-nano`; для качества можно поставить `gpt-5.4-mini` |
 | `OPENAI_BASE_URL` | базовый URL OpenAI-compatible API |
-| `AI_PROVIDER` | модель по умолчанию: `gigachat` или `chatgpt` |
+| `AI_PROVIDER` | ИИ-провайдер по умолчанию: `gigachat` или `chatgpt` |
 | `DATABASE_URL` | строка подключения к базе данных |
 | `ADMIN_ID` | Telegram ID администратора |
 | `LOG_LEVEL` | уровень логирования |

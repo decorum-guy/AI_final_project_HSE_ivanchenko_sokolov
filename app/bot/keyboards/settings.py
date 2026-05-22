@@ -13,7 +13,7 @@ def settings_menu(silent: bool, provider: str = "gigachat") -> InlineKeyboardMar
         button(kb, text="🔕 Отключить звук уведомлений", callback_data="settings:silent", style="danger")
     next_provider = "chatgpt" if provider != "chatgpt" else "gigachat"
     current = "ChatGPT" if provider == "chatgpt" else "GigaChat"
-    button(kb, text=f"🤖 Модель: {current}", callback_data=f"settings:model:{next_provider}", style="primary")
+    button(kb, text=f"🤖 ИИ-провайдер: {current}", callback_data=f"settings:model:{next_provider}", style="primary")
     button(kb, text="← Назад", callback_data="menu")
     kb.adjust(1)
     return kb.as_markup()

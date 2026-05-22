@@ -26,7 +26,7 @@ def _settings_text(user) -> str:
         "⚙️ Настройки\n\n"
         f"Текущий часовой пояс: {timezone}\n"
         f"Звук уведомлений: {sound_state}\n"
-        f"Текущая модель: {provider_title}"
+        f"ИИ-провайдер: {provider_title}"
     )
 
 
