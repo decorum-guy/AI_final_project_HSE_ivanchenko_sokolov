@@ -23,7 +23,7 @@ def digest_period(mode: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def digest_actions(digest_id: int, attempts_left: int, is_favorite: bool) -> InlineKeyboardMarkup:
+def digest_actions(digest_id: int, attempts_left: int, is_favorite: bool, include_main_menu: bool = True) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if attempts_left > 0:
         button(kb, text=f"🔄 Обновить ({attempts_left})", callback_data=f"refresh:ask:{digest_id}", style="primary")
@@ -34,7 +34,11 @@ def digest_actions(digest_id: int, attempts_left: int, is_favorite: bool) -> Inl
     button(kb, text=fav_text, callback_data=f"fav:fresh:{digest_id}", style=fav_style)
     button(kb, text="👍 Полезно", callback_data=f"fb:{digest_id}:positive", style="success")
     button(kb, text="👎 Не подходит", callback_data=f"fb:{digest_id}:negative", style="danger")
-    kb.adjust(2, 2)
+    if include_main_menu:
+        button(kb, text="🏠 В главное меню", callback_data="menu:new", style="primary")
+        kb.adjust(2, 2, 1)
+    else:
+        kb.adjust(2, 2)
     return kb.as_markup()
 
 

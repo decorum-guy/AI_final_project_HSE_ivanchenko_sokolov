@@ -6,7 +6,7 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.bot.keyboards.digest import digest_actions
+from app.bot.keyboards.digest import digest_actions, long_digest_options
 from app.core.digest import build_digest
 from app.db import queries
 from app.db.database import async_session
@@ -15,6 +15,11 @@ from app.db.database import async_session
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 _bot: Bot | None = None
+SAFE_TELEGRAM_LIMIT = 3800
+LONG_DIGEST_TEXT = (
+    "Дайджест получился слишком объемным для одного сообщения Telegram.\n\n"
+    "Можно перегенерировать короткую версию или получить полный файл."
+)
 
 
 async def start_scheduler(bot: Bot) -> None:
@@ -68,6 +73,14 @@ async def send_scheduled_digest(telegram_id: int) -> None:
         digest = await build_digest(session, user, "interests", "today", force_new=True)
         silent = user.silent_notifications
     try:
+        if len(digest.digest_text) > SAFE_TELEGRAM_LIMIT:
+            await _bot.send_message(
+                telegram_id,
+                LONG_DIGEST_TEXT,
+                reply_markup=long_digest_options(digest.id, digest.shorten_attempts_left or 2),
+                disable_notification=silent,
+            )
+            return
         await _bot.send_message(
             telegram_id,
             digest.digest_text,

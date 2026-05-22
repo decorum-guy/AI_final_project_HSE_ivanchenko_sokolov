@@ -11,7 +11,7 @@ from app.db.database import async_session
 
 
 router = Router()
-SOURCE_CONTEXTS = {"main", "digest", "subs", "admin_test"}
+SOURCE_CONTEXTS = {"main", "digest", "subs", "admin_test", "admin_long"}
 
 
 def _context_back_callback(context: str) -> str:
@@ -19,17 +19,26 @@ def _context_back_callback(context: str) -> str:
         return "digest:start"
     if context == "admin_test":
         return "admin:test"
+    if context == "admin_long":
+        return "admin:long"
     if context == "subs":
         return "subs:show"
     return "menu"
 
 
-async def _categories_keyboard(context: str):
+async def _categories_keyboard(context: str, user_id: int | None = None):
     async with async_session() as session:
         categories = await queries.list_categories(session)
+        selected = await queries.selected_source_ids(session, user_id) if user_id else set()
+        category_stats = []
+        for category in categories:
+            sources = await queries.sources_by_category(session, category)
+            selected_count = sum(1 for source in sources if source.source_id in selected)
+            category_stats.append((category, selected_count, len(sources)))
     kb = InlineKeyboardBuilder()
-    for index, category in enumerate(categories):
-        button(kb, text=category, callback_data=f"sources:cat:{context}:{index}", style="primary")
+    for index, (category, selected_count, total_count) in enumerate(category_stats):
+        label = f"{category} ({selected_count}/{total_count})" if user_id else category
+        button(kb, text=label, callback_data=f"sources:cat:{context}:{index}", style="primary")
     button(kb, text="← Назад", callback_data=_context_back_callback(context))
     category_rows = [2] * (len(categories) // 2)
     if len(categories) % 2:
@@ -58,7 +67,6 @@ async def _sources_keyboard(user_id: int, context: str, category_index: int, cat
             kb,
             text=f"{mark} {source.title}",
             callback_data=f"sources:toggle:{context}:{category_index}:{source.source_id}",
-            style="success" if is_selected else None,
         )
     button(kb, text="✅ Готово", callback_data=f"sources:done:{context}", style="success")
     button(kb, text="← Назад", callback_data=f"sources:choose:{context}")
@@ -70,9 +78,13 @@ async def _sources_keyboard(user_id: int, context: str, category_index: int, cat
 
 
 async def _open_categories(callback: CallbackQuery, context: str) -> None:
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
     await callback.message.edit_text(
-        "📡 Выбор источников\n\nСначала выберите категорию:",
-        reply_markup=await _categories_keyboard(context),
+        "📡 Выбор источников\n\n"
+        "Рядом с категорией показано, сколько источников выбрано: X/Y.\n\n"
+        "Сначала выберите категорию:",
+        reply_markup=await _categories_keyboard(context, user.id),
     )
     await safe_callback_answer(callback)
 
@@ -101,8 +113,18 @@ async def category_screen(callback: CallbackQuery) -> None:
         return
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        sources = await queries.sources_by_category(session, category)
+    descriptions = []
+    for source in sources[:8]:
+        if source.description:
+            descriptions.append(f"• {source.title}: {source.description[:120]}")
+    description_block = "\n\nОписание источников:\n" + "\n".join(descriptions) if descriptions else ""
     await callback.message.edit_text(
-        f"📡 {category}\n\nВыберите источники для дайджеста.\nНажмите на источник, чтобы добавить или убрать его.",
+        f"📡 {category}\n\n"
+        "Выберите источники для дайджеста.\n"
+        "Нажмите на источник, чтобы добавить или убрать его.\n\n"
+        "✅ — источник выбран, ☐ — источник не выбран."
+        f"{description_block}",
         reply_markup=await _sources_keyboard(user.id, context, category_index, category),
     )
 
@@ -133,6 +155,10 @@ async def sources_done(callback: CallbackQuery) -> None:
         from app.bot.keyboards.admin import admin_test_period
 
         await callback.message.edit_text("За какой период подготовить тестовый дайджест?", reply_markup=admin_test_period("selected_sources"))
+    elif context == "admin_long":
+        from app.bot.keyboards.admin import admin_long_period
+
+        await callback.message.edit_text("За какой период подготовить тестовый длинный дайджест?", reply_markup=admin_long_period("selected_sources"))
     elif context == "subs":
         await show_subscriptions(callback, prefix="Источники обновлены.\n\n")
     else:
@@ -154,7 +180,10 @@ async def show_subscriptions(callback: CallbackQuery, prefix: str = "", answer: 
         text = f"{prefix}⭐ Мои подписки\n\nВы пока не выбрали источники."
         button(kb, text="📡 Выбрать источники", callback_data="sources:choose:subs", style="primary")
     else:
-        lines = "\n".join(f"✅ {source.title}" for source in sources)
+        lines = "\n".join(
+            f"✅ {source.title}" + (f"\n   {source.description}" if source.description else "")
+            for source in sources
+        )
         text = f"{prefix}⭐ Мои подписки\n\nВы выбрали источники:\n\n{lines}"
         button(kb, text="📡 Изменить источники", callback_data="sources:choose:subs", style="primary")
     button(kb, text="← Назад", callback_data="menu")

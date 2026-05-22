@@ -23,6 +23,7 @@ class User(Base):
     schedule_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
     schedule_day: Mapped[str | None] = mapped_column(String(16), nullable=True)
     silent_notifications: Mapped[bool] = mapped_column(Boolean, default=False)
+    llm_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     digests: Mapped[list["DigestHistory"]] = relationship(back_populates="user")
 
@@ -55,8 +56,10 @@ class DigestHistory(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     digest_text: Mapped[str] = mapped_column(Text)
+    digest_title: Mapped[str | None] = mapped_column(String(120), nullable=True)
     period: Mapped[str] = mapped_column(String(32))
     source_mode: Mapped[str] = mapped_column(String(32))
+    source_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     refresh_attempts_left: Mapped[int] = mapped_column(Integer, default=2)

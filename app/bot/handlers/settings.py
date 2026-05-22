@@ -8,6 +8,7 @@ from app.bot.keyboards.schedule import timezone_menu
 from app.bot.keyboards.settings import settings_menu
 from app.bot.utils import safe_callback_answer, safe_edit_message
 from app.core.scheduler import reschedule_user
+from app.config import get_settings
 from app.db import queries
 from app.db.database import async_session
 
@@ -19,10 +20,13 @@ logger = logging.getLogger(__name__)
 def _settings_text(user) -> str:
     timezone = user.timezone or "не выбран"
     sound_state = "выключен" if user.silent_notifications else "включен"
+    provider = user.llm_provider or get_settings().ai_provider
+    provider_title = "ChatGPT" if provider == "chatgpt" else "GigaChat"
     return (
         "⚙️ Настройки\n\n"
         f"Текущий часовой пояс: {timezone}\n"
-        f"Звук уведомлений: {sound_state}"
+        f"Звук уведомлений: {sound_state}\n"
+        f"Текущая модель: {provider_title}"
     )
 
 
@@ -31,7 +35,8 @@ async def settings_screen(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
-    await safe_edit_message(callback.message, _settings_text(user), reply_markup=settings_menu(user.silent_notifications))
+    provider = user.llm_provider or get_settings().ai_provider
+    await safe_edit_message(callback.message, _settings_text(user), reply_markup=settings_menu(user.silent_notifications, provider))
 
 
 @router.callback_query(F.data == "settings:timezone")
@@ -49,7 +54,8 @@ async def save_settings_timezone(callback: CallbackQuery) -> None:
         await queries.save_timezone(session, user, zone)
         await reschedule_user(user.telegram_id)
         await session.refresh(user)
-    await safe_edit_message(callback.message, _settings_text(user), reply_markup=settings_menu(user.silent_notifications))
+    provider = user.llm_provider or get_settings().ai_provider
+    await safe_edit_message(callback.message, _settings_text(user), reply_markup=settings_menu(user.silent_notifications, provider))
 
 
 @router.callback_query(F.data == "settings:silent")
@@ -71,7 +77,8 @@ async def toggle_silent(callback: CallbackQuery) -> None:
         if callback.message is None:
             logger.error("Cannot update silent notifications keyboard: callback.message is None for user=%s", callback.from_user.id)
             return
-        await callback.message.edit_text(_settings_text(user), reply_markup=settings_menu(value))
+        provider = user.llm_provider or get_settings().ai_provider
+        await callback.message.edit_text(_settings_text(user), reply_markup=settings_menu(value, provider))
         logger.debug(
             "Silent notifications keyboard updated for user=%s new=%s",
             callback.from_user.id,
@@ -98,3 +105,18 @@ async def toggle_silent(callback: CallbackQuery) -> None:
             value,
             exc,
         )
+
+
+@router.callback_query(F.data.startswith("settings:model:"))
+async def toggle_model(callback: CallbackQuery) -> None:
+    provider = callback.data.split(":")[2]
+    await safe_callback_answer(callback, "Модель сохранена")
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        await queries.set_llm_provider(session, user, provider)
+        await session.refresh(user)
+    await safe_edit_message(
+        callback.message,
+        _settings_text(user),
+        reply_markup=settings_menu(user.silent_notifications, user.llm_provider or get_settings().ai_provider),
+    )

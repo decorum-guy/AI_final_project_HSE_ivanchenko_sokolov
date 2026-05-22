@@ -314,7 +314,9 @@ async def admin_long_mode_selected(callback: CallbackQuery) -> None:
         await safe_edit_message(callback.message, "Сначала укажите интересы для теста режима по интересам.", reply_markup=admin_long_mode())
         return
     if not selected:
-        await safe_edit_message(callback.message, "Для теста длинного дайджеста сначала выберите источники.", reply_markup=admin_long_mode())
+        from app.bot.handlers.sources import _categories_keyboard
+
+        await safe_edit_message(callback.message, "Для теста длинного дайджеста сначала выберите источники.", reply_markup=await _categories_keyboard("admin_long", user.id))
         return
 
     await safe_edit_message(

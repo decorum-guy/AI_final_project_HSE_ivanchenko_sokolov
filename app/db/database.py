@@ -26,6 +26,7 @@ async def init_db() -> None:
             "last_name": "ALTER TABLE users ADD COLUMN last_name VARCHAR(255)",
             "last_activity_at": "ALTER TABLE users ADD COLUMN last_activity_at DATETIME",
             "schedule_day": "ALTER TABLE users ADD COLUMN schedule_day VARCHAR(16)",
+            "llm_provider": "ALTER TABLE users ADD COLUMN llm_provider VARCHAR(32)",
         }
         for column, statement in migrations.items():
             if column not in existing:
@@ -38,3 +39,7 @@ async def init_db() -> None:
         existing_digest_columns = {row[1] for row in digest_columns}
         if "shorten_attempts_left" not in existing_digest_columns:
             await conn.execute(text("ALTER TABLE digest_history ADD COLUMN shorten_attempts_left INTEGER DEFAULT 2"))
+        if "digest_title" not in existing_digest_columns:
+            await conn.execute(text("ALTER TABLE digest_history ADD COLUMN digest_title VARCHAR(120)"))
+        if "source_signature" not in existing_digest_columns:
+            await conn.execute(text("ALTER TABLE digest_history ADD COLUMN source_signature TEXT"))

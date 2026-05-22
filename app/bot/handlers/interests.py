@@ -100,7 +100,7 @@ async def recommend_interests_sources(callback: CallbackQuery, state: FSMContext
             return
         await queries.sync_sources(session)
         sources = await queries.list_sources(session)
-        recommendations = await recommend_sources(user.interests_text, sources)
+        recommendations = await recommend_sources(user.interests_text, sources, user.llm_provider)
         source_by_id = {source.source_id: source for source in sources}
 
     recommendation_data = [

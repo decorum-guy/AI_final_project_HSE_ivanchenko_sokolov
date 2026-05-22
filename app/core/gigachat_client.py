@@ -6,6 +6,8 @@ from datetime import datetime
 from html import escape
 from typing import Any
 
+import httpx
+
 from app.config import get_settings
 from app.core.rss import NewsItem
 
@@ -18,6 +20,7 @@ MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)]\((https?://[^)\s]+)\)")
 SLOGAN_PLACEHOLDERS = (
     "Короткий слоган дайджеста одной строкой.",
     "Короткий слоган дайджеста в одну строку.",
+    "Конкретный короткий слоган по темам новостей.",
 )
 
 
@@ -76,6 +79,64 @@ async def ask_gigachat(
     return answer
 
 
+async def ask_chatgpt(
+    prompt: str,
+    *,
+    max_tokens: int = 1200,
+    temperature: float = 0.2,
+    model: str | None = None,
+) -> str:
+    settings = get_settings()
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY is empty")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            f"{settings.openai_base_url.rstrip('/')}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model or settings.openai_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    choices = payload.get("choices") or []
+    if not choices:
+        raise RuntimeError("ChatGPT returned an empty response")
+    answer = (choices[0].get("message") or {}).get("content", "")
+    if not answer:
+        raise RuntimeError("ChatGPT returned an empty content")
+    return str(answer).strip()
+
+
+async def ask_llm(
+    prompt: str,
+    *,
+    provider: str | None = None,
+    max_tokens: int = 1200,
+    temperature: float = 0.2,
+    model: str | None = None,
+    response_format: dict[str, Any] | None = None,
+) -> str:
+    selected = (provider or get_settings().ai_provider or "gigachat").lower()
+    if selected == "chatgpt":
+        return await ask_chatgpt(prompt, max_tokens=max_tokens, temperature=temperature, model=model)
+    return await ask_gigachat(
+        prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        model=model,
+        response_format=response_format,
+    )
+
+
 def sanitize_telegram_html(text: str) -> str:
     """Keep only Telegram-safe tags used by the digest and escape everything else."""
     result: list[str] = []
@@ -108,6 +169,7 @@ def postprocess_digest_html(text: str) -> str:
     text = text.replace("```html", "").replace("```HTML", "").replace("```json", "").replace("```JSON", "").replace("```", "")
     text = MARKDOWN_LINK_RE.sub(r'<a href="\2">\1</a>', text)
     text = MARKDOWN_BOLD_RE.sub(r"<b>\1</b>", text)
+    text = _remove_prompt_leaks(text)
     text = sanitize_telegram_html(text)
 
     if "**" in text:
@@ -116,6 +178,24 @@ def postprocess_digest_html(text: str) -> str:
         logger.warning("Digest structure warning: итог appears before новости")
     _log_digest_quality(text)
     return text
+
+
+def _remove_prompt_leaks(text: str) -> str:
+    blocked_patterns = (
+        r"^\s*important\s*:.*$",
+        r"^\s*важно\s*:.*$",
+        r"^\s*строго следуй.*$",
+        r"^\s*не копируй.*$",
+        r"^\s*сохрани telegram-compatible.*$",
+    )
+    lines = []
+    for line in text.splitlines():
+        normalized = line.strip().lower()
+        if any(re.match(pattern, normalized, flags=re.IGNORECASE) for pattern in blocked_patterns):
+            logger.warning("Removed leaked prompt instruction from digest: %s", line[:120])
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def repair_digest_text(text: str) -> str:
@@ -165,18 +245,22 @@ def _log_digest_quality(text: str) -> None:
 
 
 class GigaChatDigestClient:
-    def __init__(self) -> None:
+    def __init__(self, provider: str | None = None) -> None:
         self.settings = get_settings()
+        self.provider = (provider or self.settings.ai_provider or "gigachat").lower()
 
     async def summarize(self, items: list[NewsItem], period_title: str) -> str:
-        if not self.settings.gigachat_credentials:
+        if self.provider == "gigachat" and not self.settings.gigachat_credentials:
             logger.warning("GIGACHAT_CREDENTIALS is empty, using fallback digest")
+            return self._fallback_digest(items, period_title)
+        if self.provider == "chatgpt" and not self.settings.openai_api_key:
+            logger.warning("OPENAI_API_KEY is empty, using fallback digest")
             return self._fallback_digest(items, period_title)
 
         prompt = self._build_digest_prompt(items, period_title)
         logger.info("Sending digest prompt to GigaChat: items=%s chars=%s", len(items), len(prompt))
         try:
-            answer = await ask_gigachat(prompt, max_tokens=2600, temperature=0.15)
+            answer = await ask_llm(prompt, provider=self.provider, max_tokens=2600, temperature=0.15)
             text = postprocess_digest_html(answer)
             if _has_slogan_placeholder(text):
                 logger.warning("GigaChat copied digest slogan placeholder; regenerating slogan")
@@ -211,15 +295,15 @@ class GigaChatDigestClient:
             "12. Не делай новости только из заголовка и ссылки.",
             "13. Вводный блок и итог должны быть короткими, без длинных рассуждений.",
             "14. Символы <, >, & в обычном тексте не используй вне разрешенных HTML-тегов.",
+            "15. Не копируй поясняющие строки шаблона. Вместо описаний из шаблона всегда пиши реальный текст.",
             "",
             "Строгий шаблон ответа:",
-            "Важно: не копируй текст в фигурных скобках и не копируй пояснения шаблона. Вместо них напиши реальный текст.",
             f"<b>📰 Дайджест {period_title}</b>",
             "",
-            "<blockquote>{напиши 2 коротких предложения с главной сутью дайджеста}</blockquote>",
+            "<blockquote>Главная суть дайджеста в двух коротких предложениях.</blockquote>",
             "",
             "Слоган дайджеста:",
-            "<i>{придумай конкретный короткий слоган по темам новостей, не больше 80 символов}</i>",
+            "<i>Конкретный короткий слоган по темам новостей.</i>",
             "",
             "<b>Новости</b>",
             "",
@@ -228,7 +312,10 @@ class GigaChatDigestClient:
             "Почему важно: 1 предложение.",
             "Источник: <a href=\"URL\">Название источника</a>",
             "",
-            "... повтори блок для каждой выбранной новости ...",
+            "<b>2. Следующая новость</b>",
+            "Кратко: 1–2 предложения.",
+            "Почему важно: 1 предложение.",
+            "Источник: <a href=\"URL\">Название источника</a>",
             "",
             "<b>Итог</b>",
             "<blockquote>Короткий общий вывод по дайджесту.</blockquote>",
@@ -257,7 +344,7 @@ class GigaChatDigestClient:
             f"Дайджест:\n{digest_text[:3500]}"
         )
         try:
-            slogan = await ask_gigachat(prompt, max_tokens=120, temperature=0.4)
+            slogan = await ask_llm(prompt, provider=self.provider, max_tokens=120, temperature=0.4)
             slogan = re.sub(r"<[^>]+>", "", slogan).strip().strip('"').strip("'")
             slogan = re.sub(r"\s+", " ", slogan)
             if not slogan or len(slogan) > 120:
@@ -278,8 +365,25 @@ class GigaChatDigestClient:
             "Каждая новость должна иметь «Кратко:», «Почему важно:», «Источник:».\n\n"
             f"Дайджест:\n{digest_text}"
         )
-        answer = await ask_gigachat(prompt, max_tokens=2200, temperature=0.1)
+        answer = await ask_llm(prompt, provider=self.provider, max_tokens=2200, temperature=0.1)
         return postprocess_digest_html(answer)
+
+    async def history_title(self, digest_text: str) -> str:
+        prompt = (
+            "Придумай короткое название для истории новостного дайджеста.\n"
+            "Правила: 3–6 слов, без кавычек, без Markdown, без HTML, без точки в конце.\n\n"
+            f"Дайджест:\n{digest_text[:2500]}"
+        )
+        try:
+            title = await ask_llm(prompt, provider=self.provider, max_tokens=80, temperature=0.3)
+            title = re.sub(r"<[^>]+>", "", title).strip().strip('"').strip("'")
+            title = re.sub(r"\s+", " ", title)
+            if not title or len(title) > 80:
+                return "Свежая подборка новостей"
+            return title
+        except Exception:
+            logger.exception("Failed to generate digest history title")
+            return "Свежая подборка новостей"
 
     def _fallback_digest(self, items: list[NewsItem], period_title: str) -> str:
         if not items:

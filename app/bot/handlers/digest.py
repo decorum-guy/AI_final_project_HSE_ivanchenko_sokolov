@@ -171,7 +171,7 @@ async def shorten_digest(callback: CallbackQuery) -> None:
         await queries.decrement_shorten(session, digest)
         await session.refresh(digest)
         try:
-            short_text = await GigaChatDigestClient().shorten(digest.digest_text)
+            short_text = await GigaChatDigestClient(user.llm_provider).shorten(digest.digest_text)
         except Exception:
             short_text = ""
 

@@ -54,6 +54,15 @@ def _deduplicate(items: list[NewsItem]) -> list[NewsItem]:
     return result
 
 
+def _period_title_with_date(period: str) -> str:
+    base = PERIOD_TITLES.get(period, "за выбранный период")
+    return f"{base} ({datetime.now():%d.%m.%Y})"
+
+
+def _user_provider(user: User) -> str | None:
+    return user.llm_provider or None
+
+
 def _limit_per_source(items: list[NewsItem], period: str) -> list[NewsItem]:
     limit = MAX_ARTICLES_PER_SOURCE.get(period, 3)
     counters: dict[str, int] = defaultdict(int)
@@ -142,7 +151,8 @@ async def build_digest(
     progress_callback=None,
 ) -> DigestHistory:
     if not force_new:
-        cached = await queries.cached_digest(session, user.id, period, source_mode)
+        source_signature = await queries.selected_source_signature(session, user.id)
+        cached = await queries.cached_digest(session, user.id, period, source_mode, source_signature)
         if cached:
             repaired = repair_digest_text(cached.digest_text)
             if repaired != cached.digest_text:
@@ -152,12 +162,16 @@ async def build_digest(
             return cached
 
     prepared = await prepare_digest_input(session, user, source_mode, period, progress_callback=progress_callback)
+    source_signature = await queries.selected_source_signature(session, user.id)
     if not prepared.items:
         text = "Не удалось найти свежие новости по выбранным источникам за этот период. Попробуйте выбрать другой период или добавить источники."
+        digest_title = "Без свежих новостей"
     else:
-        text = await GigaChatDigestClient().summarize(prepared.items, PERIOD_TITLES.get(period, "за выбранный период"))
+        client = GigaChatDigestClient(_user_provider(user))
+        text = await client.summarize(prepared.items, _period_title_with_date(period))
         if prepared.note:
             text = f"{prepared.note}\n\n{text}"
+        digest_title = await client.history_title(text)
 
     return await queries.create_digest(
         session=session,
@@ -166,6 +180,8 @@ async def build_digest(
         period=period,
         source_mode=source_mode,
         used_links=prepared.used_links,
+        digest_title=digest_title,
+        source_signature=source_signature,
     )
 
 
@@ -175,7 +191,9 @@ async def refresh_digest(session: AsyncSession, user: User, digest: DigestHistor
     new_items = [item for item in prepared.items if item.link and item.link not in old_links]
     if not new_items:
         return None
-    text = await GigaChatDigestClient().summarize(new_items, PERIOD_TITLES.get(digest.period, "за выбранный период"))
+    client = GigaChatDigestClient(_user_provider(user))
+    text = await client.summarize(new_items, _period_title_with_date(digest.period))
+    digest_title = await client.history_title(text)
     return await queries.create_digest(
         session=session,
         user_id=user.id,
@@ -183,4 +201,6 @@ async def refresh_digest(session: AsyncSession, user: User, digest: DigestHistor
         period=digest.period,
         source_mode=digest.source_mode,
         used_links=[item.link for item in new_items if item.link],
+        digest_title=digest_title,
+        source_signature=await queries.selected_source_signature(session, user.id),
     )

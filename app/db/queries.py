@@ -220,6 +220,11 @@ async def selected_sources(session: AsyncSession, user_id: int) -> list[NewsSour
     return found
 
 
+async def selected_source_signature(session: AsyncSession, user_id: int) -> str:
+    ids = await selected_source_ids(session, user_id)
+    return "\n".join(sorted(ids))
+
+
 async def toggle_source(session: AsyncSession, user_id: int, source_id: str) -> bool:
     source = await session.scalar(select(NewsSource).where(NewsSource.source_id == source_id, NewsSource.is_active.is_(True)))
     if not source:
@@ -267,12 +272,16 @@ async def create_digest(
     period: str,
     source_mode: str,
     used_links: list[str],
+    digest_title: str | None = None,
+    source_signature: str | None = None,
 ) -> DigestHistory:
     digest = DigestHistory(
         user_id=user_id,
         digest_text=text,
+        digest_title=digest_title,
         period=period,
         source_mode=source_mode,
+        source_signature=source_signature,
         used_links="\n".join(used_links),
     )
     session.add(digest)
@@ -285,10 +294,13 @@ async def get_digest(session: AsyncSession, digest_id: int, user_id: int) -> Dig
     return await session.scalar(select(DigestHistory).where(DigestHistory.id == digest_id, DigestHistory.user_id == user_id))
 
 
-async def cached_digest(session: AsyncSession, user_id: int, period: str, source_mode: str) -> DigestHistory | None:
+async def cached_digest(session: AsyncSession, user_id: int, period: str, source_mode: str, source_signature: str | None = None) -> DigestHistory | None:
+    conditions = [DigestHistory.user_id == user_id, DigestHistory.period == period, DigestHistory.source_mode == source_mode]
+    if source_signature is not None:
+        conditions.append(DigestHistory.source_signature == source_signature)
     return await session.scalar(
         select(DigestHistory)
-        .where(DigestHistory.user_id == user_id, DigestHistory.period == period, DigestHistory.source_mode == source_mode)
+        .where(*conditions)
         .order_by(DigestHistory.created_at.desc())
         .limit(1)
     )
@@ -325,6 +337,11 @@ async def decrement_refresh(session: AsyncSession, digest: DigestHistory) -> Non
 async def decrement_shorten(session: AsyncSession, digest: DigestHistory) -> None:
     attempts_left = digest.shorten_attempts_left if digest.shorten_attempts_left is not None else 2
     digest.shorten_attempts_left = max(0, attempts_left - 1)
+    await session.commit()
+
+
+async def set_llm_provider(session: AsyncSession, user: User, provider: str) -> None:
+    user.llm_provider = provider if provider in {"gigachat", "chatgpt"} else "gigachat"
     await session.commit()
 
 

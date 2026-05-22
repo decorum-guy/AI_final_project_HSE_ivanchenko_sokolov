@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 
 from app.config import get_settings
-from app.core.gigachat_client import ask_gigachat
+from app.core.gigachat_client import ask_llm
 from app.core.rss import NewsItem
 from app.db.models import NewsSource
 
@@ -73,15 +73,26 @@ def _recommendation_response_format() -> dict:
     }
 
 
-async def recommend_sources(interests_text: str, sources: list[NewsSource]) -> list[SourceRecommendation]:
+def _can_use_provider(provider: str | None) -> bool:
+    settings = get_settings()
+    selected = (provider or settings.ai_provider or "gigachat").lower()
+    if selected == "chatgpt":
+        return bool(settings.openai_api_key)
+    return bool(settings.gigachat_credentials)
+
+
+async def recommend_sources(interests_text: str, sources: list[NewsSource], provider: str | None = None) -> list[SourceRecommendation]:
     active_sources = [source for source in sources if source.is_active]
     valid_source_ids = {source.source_id for source in active_sources}
-    if get_settings().gigachat_credentials and active_sources:
+    selected_provider = (provider or get_settings().ai_provider or "gigachat").lower()
+    provider_title = "ChatGPT" if selected_provider == "chatgpt" else "GigaChat"
+    if _can_use_provider(selected_provider) and active_sources:
         prompt = _build_recommendation_prompt(interests_text, active_sources)
-        logger.info("Sending recommendation prompt to GigaChat: sources=%s chars=%s", len(active_sources), len(prompt))
+        logger.info("Sending recommendation prompt to %s: sources=%s chars=%s", provider_title, len(active_sources), len(prompt))
         try:
-            answer = await ask_gigachat(
+            answer = await ask_llm(
                 prompt,
+                provider=selected_provider,
                 max_tokens=1500,
                 temperature=0.1,
                 response_format=_recommendation_response_format(),
@@ -97,14 +108,17 @@ async def recommend_sources(interests_text: str, sources: list[NewsSource]) -> l
                         existing.add(item.source_id)
                         if len(recommendations) >= 5:
                             break
-                logger.info("GigaChat recommended %s sources", len(recommendations))
+                logger.info("%s recommended %s sources", provider_title, len(recommendations))
                 return recommendations
             logger.warning(
-                "GigaChat recommendation response has too few valid source_id values: %s",
+                "%s recommendation response has too few valid source_id values: %s",
+                provider_title,
                 len(recommendations),
             )
         except Exception as exc:
-            logger.exception("GigaChat recommendation request failed, using fallback: %s", exc)
+            logger.exception("%s recommendation request failed, using fallback: %s", provider_title, exc)
+    elif active_sources:
+        logger.info("AI recommendation provider %s is not configured, using fallback", provider_title)
     return fallback_recommend_sources(interests_text, active_sources)
 
 
