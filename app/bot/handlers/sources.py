@@ -39,11 +39,14 @@ async def _categories_keyboard(context: str, user_id: int | None = None):
     for index, (category, selected_count, total_count) in enumerate(category_stats):
         label = f"{category} ({selected_count}/{total_count})" if user_id else category
         button(kb, text=label, callback_data=f"sources:cat:{context}:{index}", style="primary")
+    if user_id:
+        button(kb, text="🧹 Очистить все", callback_data=f"sources:clear_confirm:{context}", style="danger")
     button(kb, text="← Назад", callback_data=_context_back_callback(context))
     category_rows = [2] * (len(categories) // 2)
     if len(categories) % 2:
         category_rows.append(1)
-    kb.adjust(*category_rows, 1)
+    tail_rows = [1, 1] if user_id else [1]
+    kb.adjust(*category_rows, *tail_rows)
     return kb.as_markup()
 
 
@@ -77,7 +80,7 @@ async def _sources_keyboard(user_id: int, context: str, category_index: int, cat
     return kb.as_markup()
 
 
-async def _open_categories(callback: CallbackQuery, context: str) -> None:
+async def _open_categories(callback: CallbackQuery, context: str, answer: bool = True) -> None:
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
     await callback.message.edit_text(
@@ -87,7 +90,8 @@ async def _open_categories(callback: CallbackQuery, context: str) -> None:
         "Сначала выберите категорию:",
         reply_markup=await _categories_keyboard(context, user.id),
     )
-    await safe_callback_answer(callback)
+    if answer:
+        await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "sources:show")
@@ -101,6 +105,60 @@ async def sources_choose_context(callback: CallbackQuery) -> None:
     if context not in SOURCE_CONTEXTS:
         context = "main"
     await _open_categories(callback, context)
+
+
+@router.callback_query(F.data.startswith("sources:clear_confirm:"))
+async def clear_sources_confirm(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+    context = callback.data.split(":")[2]
+    if context not in SOURCE_CONTEXTS:
+        context = "main"
+    kb = InlineKeyboardBuilder()
+    button(kb, text="✅ Да, очистить", callback_data=f"sources:clear:{context}", style="danger")
+    button(kb, text="← Назад", callback_data=f"sources:choose:{context}")
+    kb.adjust(1)
+    await callback.message.edit_text(
+        "Вы уверены, что хотите удалить все выбранные источники?",
+        reply_markup=kb.as_markup(),
+    )
+
+
+@router.callback_query(F.data.startswith("sources:clear:"))
+async def clear_sources(callback: CallbackQuery) -> None:
+    context = callback.data.split(":")[2]
+    if context not in SOURCE_CONTEXTS:
+        context = "main"
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        deleted = await queries.clear_user_sources(session, user.id)
+    if deleted == 0:
+        await safe_callback_answer(callback, "Выбранных источников уже нет")
+    else:
+        await safe_callback_answer(callback, "Источники очищены")
+    await _open_categories(callback, context, answer=False)
+
+
+@router.callback_query(F.data == "subs:clear_confirm")
+async def clear_subscriptions_confirm(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+    kb = InlineKeyboardBuilder()
+    button(kb, text="✅ Да, очистить", callback_data="subs:clear", style="danger")
+    button(kb, text="← Назад", callback_data="subs:show")
+    kb.adjust(1)
+    await callback.message.edit_text(
+        "Вы уверены, что хотите удалить все выбранные источники?",
+        reply_markup=kb.as_markup(),
+    )
+
+
+@router.callback_query(F.data == "subs:clear")
+async def clear_subscriptions(callback: CallbackQuery) -> None:
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        deleted = await queries.clear_user_sources(session, user.id)
+    await safe_callback_answer(callback, "Подписки очищены" if deleted else "Выбранных источников уже нет")
+    prefix = "Подписки очищены.\n\n" if deleted else "Выбранных источников уже нет.\n\n"
+    await show_subscriptions(callback, prefix=prefix, answer=False)
 
 
 @router.callback_query(F.data.startswith("sources:cat:"))
@@ -186,16 +244,17 @@ async def show_subscriptions(callback: CallbackQuery, prefix: str = "", answer: 
         button(kb, text="🤖 Подобрать источники по интересам", callback_data="interests:recommend", style="success")
         button(kb, text="📡 Выбрать вручную", callback_data="sources:choose:subs", style="primary")
     else:
-        lines = "\n".join(
-            f"✅ {source.title}" + (f"\n   {source.description}" if source.description else "")
-            for source in sources
+        lines = "\n\n".join(
+            f"{index}. {source.title}" + (f"\n{source.category} — {source.description}" if source.description else f"\n{source.category}")
+            for index, source in enumerate(sources, start=1)
         )
         text = (
             f"{prefix}⭐ Мои подписки\n\n"
-            f"Вы выбрали источники:\n\n{lines}\n\n"
+            f"📡 Ваши подписки:\n\n{lines}\n\n"
             "Теперь можно сформировать дайджест или скорректировать список."
         )
         button(kb, text="📡 Изменить источники", callback_data="sources:choose:subs", style="primary")
+        button(kb, text="🧹 Очистить все", callback_data="subs:clear_confirm", style="danger")
         button(kb, text="📰 Получить дайджест", callback_data="digest:start", style="success")
     button(kb, text="🏠 Главное меню", callback_data="menu", style="primary")
     kb.adjust(1)

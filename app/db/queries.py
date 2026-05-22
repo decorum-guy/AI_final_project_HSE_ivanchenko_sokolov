@@ -258,6 +258,12 @@ async def add_user_sources(session: AsyncSession, user_id: int, source_ids: list
     return added
 
 
+async def clear_user_sources(session: AsyncSession, user_id: int) -> int:
+    result = await session.execute(delete(UserSource).where(UserSource.user_id == user_id))
+    await session.commit()
+    return result.rowcount or 0
+
+
 async def sources_for_user(session: AsyncSession, user_id: int, mode: str) -> list[NewsSource]:
     if mode in {"selected_sources", "interests"}:
         selected = await selected_sources(session, user_id)
