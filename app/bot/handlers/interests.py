@@ -54,7 +54,7 @@ def _recommendations_text(recommendations: list[dict], source_by_id: dict[str, o
         item_text = f"{index}. {title}\nПочему подходит: {reason}"
 
         if item.get("removed"):
-            lines.append(f"\n<s>{item_text}</s>\n<i>Удалено пользователем</i>")
+            lines.append(f"\n<s>{item_text}</s>\n<i>(Удалено пользователем)</i>")
         else:
             lines.append(f"\n{item_text}")
 
