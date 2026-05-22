@@ -14,6 +14,12 @@ async def show_menu(callback: CallbackQuery) -> None:
     await safe_edit_message(callback.message, "Главное меню", reply_markup=main_menu())
 
 
+@router.callback_query(F.data == "menu:new")
+async def send_menu(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+    await callback.message.answer("Главное меню", reply_markup=main_menu())
+
+
 @router.callback_query(F.data == "help")
 async def help_screen(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
@@ -31,6 +37,8 @@ async def help_screen(callback: CallbackQuery) -> None:
         "🤖 ИИ-подбор источников\n"
         "Это отдельный шаг: GigaChat анализирует ваши интересы и список доступных RSS-источников, затем предлагает подходящие подписки. "
         "Это не то же самое, что режим дайджеста по интересам.\n\n"
-        "Все дайджесты автоматически попадают в историю. Под свежим дайджестом доступны избранное, оценка и проверка новых новостей.",
+        "Все дайджесты автоматически попадают в историю. Под свежим дайджестом доступны избранное, оценка и проверка новых новостей.\n\n"
+        "⚠️ Важно: ИИ может ошибаться в фактах, формулировках, выборе акцентов и оформлении ответа. "
+        "Мы добавили проверки и обработку ошибок, но полностью гарантировать идеальный результат невозможно.",
         reply_markup=back_main(),
     )
