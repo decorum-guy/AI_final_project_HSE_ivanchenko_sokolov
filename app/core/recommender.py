@@ -133,9 +133,11 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
         "6. Ответ строго JSON по схеме."
     )
     try:
+        logger.info("Normalizing interests with ChatGPT model gpt-5.4-nano")
         answer = await ask_llm(
             prompt,
-            provider=provider,
+            provider="chatgpt",
+            model="gpt-5.4-nano",
             max_tokens=500,
             temperature=0.1,
             response_format=_normalization_response_format(),

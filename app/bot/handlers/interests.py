@@ -83,7 +83,12 @@ async def edit_interests_text(callback: CallbackQuery, state: FSMContext) -> Non
     await state.set_state(InterestState.waiting_text)
     await safe_edit_message(
         callback.message,
-        "Напишите ваши интересы одним сообщением.\n\nНапример:\nИИ, технологии, стартапы, маркетинг, кино, наука",
+        "Напишите ваши интересы одним сообщением.\n\n"
+        "Можно написать обычной фразой или списком через запятую.\n\n"
+        "Например:\n"
+        "Мне нравится маркетинг и пиар\n\n"
+        "Или так:\n"
+        "Маркетинг, пиар",
         reply_markup=interests_edit_back(),
     )
 
@@ -123,7 +128,7 @@ async def edit_keywords_screen(callback: CallbackQuery, state: FSMContext) -> No
         callback.message,
         "🧩 Нормализованные слова\n\n"
         f"{keywords_text(keywords) or 'Пока слов нет.'}\n\n"
-        "Пишите слова в начальной форме: например, «игра» вместо «игры», «театр» вместо «театром».",
+        "Пишите слова в начальной форме: например,\n не «игры», а «игра»,\n не «театры», а «театр».",
         reply_markup=keywords_menu(keywords),
     )
 
