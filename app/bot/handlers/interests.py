@@ -50,8 +50,14 @@ def _recommendations_text(recommendations: list[dict], source_by_id: dict[str, o
         source = source_by_id.get(source_id)
         title = escape(source.title if source else source_id)
         reason = escape(item["reason"])
-        removed_note = " <s>(Удалено пользователем)</s>" if item.get("removed") else ""
-        lines.append(f"\n{index}. {title}{removed_note}\nПочему подходит: {reason}")
+
+        item_text = f"{index}. {title}\nПочему подходит: {reason}"
+
+        if item.get("removed"):
+            lines.append(f"\n<s>{item_text}</s>\n<i>Удалено пользователем</i>")
+        else:
+            lines.append(f"\n{item_text}")
+
     return "\n".join(lines)
 
 
