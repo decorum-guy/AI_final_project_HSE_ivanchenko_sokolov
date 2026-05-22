@@ -7,6 +7,7 @@ from app.bot.keyboards.styles import button
 def interests_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     button(kb, text="✏️ Изменить интересы", callback_data="interests:edit", style="primary")
+    button(kb, text="🧩 Изменить слова", callback_data="interests:keywords", style="primary")
     button(kb, text="🤖 Подобрать источники", callback_data="interests:recommend", style="success")
     button(kb, text="📡 Выбрать вручную", callback_data="sources:choose:subs", style="primary")
     button(kb, text="← Назад", callback_data="menu")
@@ -21,8 +22,18 @@ def interests_edit_back() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def interests_edit_choice() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button(kb, text="✏️ Свободный текст + ИИ", callback_data="interests:edit:text", style="primary")
+    button(kb, text="🧩 Слова вручную", callback_data="interests:keywords", style="primary")
+    button(kb, text="← Назад", callback_data="interests:show")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def interests_after_save() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    button(kb, text="🧩 Изменить слова", callback_data="interests:keywords", style="primary")
     button(kb, text="🤖 Подобрать источники", callback_data="interests:recommend", style="success")
     button(kb, text="📡 Выбрать вручную", callback_data="sources:choose:subs", style="primary")
     button(kb, text="← Назад", callback_data="interests:show")
@@ -38,6 +49,25 @@ def recommendations_menu() -> InlineKeyboardMarkup:
     button(kb, text="🔄 Подобрать заново", callback_data="interests:recommend", style="primary")
     button(kb, text="← Назад", callback_data="interests:show")
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def keywords_menu(keywords: list[str]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button(kb, text="➕ Добавить слово", callback_data="interests:keyword:add", style="success")
+    if keywords:
+        button(kb, text="➖ Удалить слово", callback_data="interests:keyword:delete_menu", style="danger")
+    button(kb, text="← Назад", callback_data="interests:show")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def keywords_delete_menu(keywords: list[str]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for index, word in enumerate(keywords):
+        button(kb, text=f"✖ {word}", callback_data=f"interests:keyword:delete:{index}", style="danger")
+    button(kb, text="← Назад", callback_data="interests:keywords")
+    kb.adjust(*([1] * len(keywords)), 1)
     return kb.as_markup()
 
 

@@ -17,6 +17,7 @@ class User(Base):
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     interests_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interests_keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
     timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     schedule_type: Mapped[str | None] = mapped_column(String(32), nullable=True)

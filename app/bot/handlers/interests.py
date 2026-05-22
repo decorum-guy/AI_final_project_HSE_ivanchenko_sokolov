@@ -7,13 +7,16 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.keyboards.interests import (
     interests_after_save,
+    interests_edit_choice,
     interests_edit_back,
     interests_menu,
+    keywords_delete_menu,
+    keywords_menu,
     recommendation_review_menu,
     recommendations_menu,
 )
 from app.bot.utils import safe_callback_answer, safe_edit_message
-from app.core.recommender import recommend_sources
+from app.core.recommender import keywords_text, normalize_interests, parse_keywords, recommend_sources
 from app.db import queries
 from app.db.database import async_session
 
@@ -23,15 +26,19 @@ router = Router()
 
 class InterestState(StatesGroup):
     waiting_text = State()
+    waiting_keyword_add = State()
 
 
-def _interests_text(current: str | None) -> str:
+def _interests_text(current: str | None, keywords: str | None) -> str:
+    normalized = keywords or "Пока не нормализованы"
     return (
         "🎯 Мои интересы\n\n"
         "Здесь можно указать темы, которые вам интересны.\n"
-        "На основе интересов бот подберет подходящие RSS-источники.\n\n"
+        "На основе интересов бот подберет источники, а нормализованные слова помогут точнее ранжировать новости.\n\n"
         "Текущие интересы:\n"
-        f"{current or 'Пока не указаны'}"
+        f"{current or 'Пока не указаны'}\n\n"
+        "Нормализованные слова:\n"
+        f"{normalized}"
     )
 
 
@@ -53,11 +60,24 @@ async def interests_screen(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
-    await safe_edit_message(callback.message, _interests_text(user.interests_text), reply_markup=interests_menu())
+    await safe_edit_message(callback.message, _interests_text(user.interests_text, user.interests_keywords), reply_markup=interests_menu())
 
 
 @router.callback_query(F.data == "interests:edit")
 async def edit_interests(callback: CallbackQuery, state: FSMContext) -> None:
+    await safe_callback_answer(callback)
+    await state.clear()
+    await safe_edit_message(
+        callback.message,
+        "Как изменить интересы?\n\n"
+        "✏️ Свободный текст + ИИ — вы пишете обычную фразу, а ИИ нормализует ее в список слов.\n\n"
+        "🧩 Слова вручную — вы сами добавляете или удаляете нормализованные слова без обращения к ИИ.",
+        reply_markup=interests_edit_choice(),
+    )
+
+
+@router.callback_query(F.data == "interests:edit:text")
+async def edit_interests_text(callback: CallbackQuery, state: FSMContext) -> None:
     await safe_callback_answer(callback)
     await state.set_state(InterestState.waiting_text)
     await safe_edit_message(
@@ -69,6 +89,7 @@ async def edit_interests(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(InterestState.waiting_text)
 async def save_interests_text(message: Message, state: FSMContext) -> None:
+    raw_text = message.text or ""
     async with async_session() as session:
         user = await queries.get_or_create_user(
             session,
@@ -77,11 +98,105 @@ async def save_interests_text(message: Message, state: FSMContext) -> None:
             message.from_user.first_name,
             message.from_user.last_name,
         )
-        await queries.save_interests(session, user, message.text or "")
+        keywords = await normalize_interests(raw_text, user.llm_provider)
+        await queries.save_interests(session, user, raw_text, keywords)
     await state.clear()
     await message.answer(
-        "Интересы сохранены.\n\nТеперь я могу подобрать источники под ваши темы.",
+        "Интересы сохранены.\n\n"
+        f"Вы ввели:\n{raw_text.strip() or 'Пусто'}\n\n"
+        "ИИ нормализовал в слова:\n"
+        f"{keywords_text(keywords) or 'Не удалось выделить слова'}\n\n"
+        "Эти слова можно отредактировать вручную.",
         reply_markup=interests_after_save(),
+    )
+
+
+@router.callback_query(F.data == "interests:keywords")
+async def edit_keywords_screen(callback: CallbackQuery, state: FSMContext) -> None:
+    await safe_callback_answer(callback)
+    await state.clear()
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+    keywords = parse_keywords(user.interests_keywords)
+    await safe_edit_message(
+        callback.message,
+        "🧩 Нормализованные слова\n\n"
+        f"{keywords_text(keywords) or 'Пока слов нет.'}\n\n"
+        "Пишите слова в единственном числе и именительном падеже: не «рекламу», а «реклама».",
+        reply_markup=keywords_menu(keywords),
+    )
+
+
+@router.callback_query(F.data == "interests:keyword:add")
+async def add_keyword_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await safe_callback_answer(callback)
+    await state.set_state(InterestState.waiting_keyword_add)
+    await safe_edit_message(
+        callback.message,
+        "Напишите одно слово или несколько слов через запятую.\n\n"
+        "Пожалуйста, используйте единственное число и именительный падеж: «реклама», «пиар», «маркетинг».",
+        reply_markup=interests_edit_back(),
+    )
+
+
+@router.message(InterestState.waiting_keyword_add)
+async def add_keyword_save(message: Message, state: FSMContext) -> None:
+    new_keywords = parse_keywords(message.text)
+    async with async_session() as session:
+        user = await queries.get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.username,
+            message.from_user.first_name,
+            message.from_user.last_name,
+        )
+        keywords = parse_keywords(user.interests_keywords)
+        existing = set(keywords)
+        for word in new_keywords:
+            if word not in existing:
+                keywords.append(word)
+                existing.add(word)
+        await queries.save_interests_keywords(session, user, keywords)
+    await state.clear()
+    await message.answer(
+        "Список слов обновлен.\n\n"
+        f"Нормализованные слова:\n{keywords_text(keywords) or 'Пока слов нет.'}",
+        reply_markup=keywords_menu(keywords),
+    )
+
+
+@router.callback_query(F.data == "interests:keyword:delete_menu")
+async def delete_keyword_menu(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+    keywords = parse_keywords(user.interests_keywords)
+    if not keywords:
+        await safe_callback_answer(callback, "Список слов пуст", show_alert=True)
+        return
+    await safe_edit_message(
+        callback.message,
+        "Выберите слово, которое нужно удалить:",
+        reply_markup=keywords_delete_menu(keywords),
+    )
+
+
+@router.callback_query(F.data.startswith("interests:keyword:delete:"))
+async def delete_keyword(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback, "Удалено")
+    index = int(callback.data.rsplit(":", 1)[1])
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        keywords = parse_keywords(user.interests_keywords)
+        if 0 <= index < len(keywords):
+            keywords.pop(index)
+            await queries.save_interests_keywords(session, user, keywords)
+    await safe_edit_message(
+        callback.message,
+        "🧩 Нормализованные слова\n\n"
+        f"{keywords_text(keywords) or 'Пока слов нет.'}\n\n"
+        "Пишите слова в единственном числе и именительном падеже.",
+        reply_markup=keywords_menu(keywords),
     )
 
 
@@ -100,7 +215,8 @@ async def recommend_interests_sources(callback: CallbackQuery, state: FSMContext
             return
         await queries.sync_sources(session)
         sources = await queries.list_sources(session)
-        recommendations = await recommend_sources(user.interests_text, sources, user.llm_provider)
+        recommendation_query = user.interests_keywords or user.interests_text
+        recommendations = await recommend_sources(recommendation_query, sources, user.llm_provider)
         source_by_id = {source.source_id: source for source in sources}
 
     recommendation_data = [

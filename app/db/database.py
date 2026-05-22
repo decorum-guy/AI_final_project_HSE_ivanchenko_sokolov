@@ -27,6 +27,7 @@ async def init_db() -> None:
             "last_activity_at": "ALTER TABLE users ADD COLUMN last_activity_at DATETIME",
             "schedule_day": "ALTER TABLE users ADD COLUMN schedule_day VARCHAR(16)",
             "llm_provider": "ALTER TABLE users ADD COLUMN llm_provider VARCHAR(32)",
+            "interests_keywords": "ALTER TABLE users ADD COLUMN interests_keywords TEXT",
         }
         for column, statement in migrations.items():
             if column not in existing:

@@ -14,6 +14,20 @@ from app.db.models import NewsSource
 logger = logging.getLogger(__name__)
 POPULAR_CATEGORIES = {"it", "бизнес", "технологии", "наука", "международные"}
 MIN_VALID_GIGACHAT_RECOMMENDATIONS = 3
+MIN_NORMALIZED_KEYWORDS = 3
+INTEREST_STOPWORDS = {
+    "люблю",
+    "интересно",
+    "интересует",
+    "хочу",
+    "нравится",
+    "про",
+    "для",
+    "или",
+    "как",
+    "что",
+    "это",
+}
 
 
 @dataclass(frozen=True)
@@ -24,6 +38,118 @@ class SourceRecommendation:
 
 def _words(text: str | None) -> set[str]:
     return {word for word in re.findall(r"[a-zA-Zа-яА-Я0-9]+", (text or "").lower()) if len(word) > 2}
+
+
+def _normalize_keyword_word(word: str) -> str:
+    word = word.strip().lower()
+    replacements = {
+        "рекламу": "реклама",
+        "рекламы": "реклама",
+        "игры": "игра",
+        "игру": "игра",
+        "технологии": "технология",
+    }
+    if word in replacements:
+        return replacements[word]
+    if len(word) > 4 and word.endswith("у"):
+        return word[:-1] + "а"
+    if len(word) > 4 and word.endswith("ю"):
+        return word[:-1] + "я"
+    return word
+
+
+def parse_keywords(text: str | None) -> list[str]:
+    if not text:
+        return []
+    words = []
+    seen = set()
+    for raw_word in re.split(r"[,;\n]+", text):
+        word = raw_word.strip().lower()
+        word = re.sub(r"\s+", " ", word)
+        if " " not in word:
+            word = _normalize_keyword_word(word)
+        if not word or word in seen:
+            continue
+        if len(word) <= 2:
+            continue
+        words.append(word)
+        seen.add(word)
+    return words[:30]
+
+
+def keywords_text(keywords: list[str]) -> str:
+    return ", ".join(parse_keywords(", ".join(keywords)))
+
+
+def fallback_normalize_interests(interests_text: str) -> list[str]:
+    words = []
+    seen = set()
+    for word in _words(interests_text):
+        if word in INTEREST_STOPWORDS:
+            continue
+        normalized = _normalize_keyword_word(word)
+        if normalized in INTEREST_STOPWORDS or normalized in seen:
+            continue
+        words.append(normalized)
+        seen.add(normalized)
+    return sorted(words)[:12]
+
+
+def _normalization_response_format() -> dict:
+    return {
+        "type": "json_schema",
+        "name": "normalized_interests",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 3,
+                    "maxItems": 20,
+                },
+            },
+            "required": ["keywords"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    }
+
+
+async def normalize_interests(interests_text: str, provider: str | None = None) -> list[str]:
+    text = (interests_text or "").strip()
+    if not text:
+        return []
+    prompt = (
+        "Ты нормализуешь интересы пользователя для поиска и ранжирования новостей.\n\n"
+        f"Интересы пользователя:\n{text}\n\n"
+        "Верни от 3 до 20 ключевых слов или коротких словосочетаний.\n"
+        "Правила:\n"
+        "1. Пиши на русском языке, если это естественно для термина.\n"
+        "2. Слова приводи к единственному числу и именительному падежу: не «рекламу», а «реклама».\n"
+        "3. Добавляй полезные синонимы и близкие профессиональные термины.\n"
+        "4. Убирай мусорные слова вроде «люблю», «интересно», «хочу».\n"
+        "5. Не добавляй темы, которых явно нет в интересах пользователя.\n"
+        "6. Ответ строго JSON по схеме."
+    )
+    try:
+        answer = await ask_llm(
+            prompt,
+            provider=provider,
+            max_tokens=500,
+            temperature=0.1,
+            response_format=_normalization_response_format(),
+        )
+        payload = extract_json_object(answer)
+        if isinstance(payload, dict):
+            raw_keywords = payload.get("keywords") or []
+            keywords = parse_keywords(", ".join(str(item) for item in raw_keywords))
+            if len(keywords) >= MIN_NORMALIZED_KEYWORDS:
+                return keywords
+        logger.warning("Interest normalization returned too few keywords, using fallback")
+    except Exception as exc:
+        logger.exception("Interest normalization failed, using fallback: %s", exc)
+    return fallback_normalize_interests(text)
 
 
 def relevance_score(text: str, interests_text: str | None) -> int:

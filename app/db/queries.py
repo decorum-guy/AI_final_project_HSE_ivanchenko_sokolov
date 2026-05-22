@@ -345,8 +345,15 @@ async def set_llm_provider(session: AsyncSession, user: User, provider: str) -> 
     await session.commit()
 
 
-async def save_interests(session: AsyncSession, user: User, text: str) -> None:
+async def save_interests(session: AsyncSession, user: User, text: str, keywords: list[str] | None = None) -> None:
     user.interests_text = text.strip()
+    if keywords is not None:
+        user.interests_keywords = ", ".join(keywords)
+    await session.commit()
+
+
+async def save_interests_keywords(session: AsyncSession, user: User, keywords: list[str]) -> None:
+    user.interests_keywords = ", ".join(keywords)
     await session.commit()
 
 

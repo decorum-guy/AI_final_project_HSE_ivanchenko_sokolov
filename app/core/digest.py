@@ -95,21 +95,29 @@ async def prepare_digest_input(
 
     collected = len(items)
     deduped = _deduplicate(items)
+    interest_query = user.interests_keywords or user.interests_text
     if source_mode == "interests":
-        deduped = filter_by_interests(deduped, user.interests_text)
+        deduped = filter_by_interests(deduped, interest_query)
     else:
         deduped = sorted(deduped, key=lambda item: (item.published is not None, item.published or datetime.min), reverse=True)
 
     limited_per_source = _limit_per_source(deduped, period)
-    ranked = sorted(
-        limited_per_source,
-        key=lambda item: (
-            relevance_score(f"{item.title} {item.summary} {item.source} {item.category}", user.interests_text),
-            item.published is not None,
-            item.published or datetime.min,
-        ),
-        reverse=True,
-    )
+    if source_mode == "interests":
+        ranked = sorted(
+            limited_per_source,
+            key=lambda item: (
+                relevance_score(f"{item.title} {item.summary} {item.source} {item.category}", interest_query),
+                item.published is not None,
+                item.published or datetime.min,
+            ),
+            reverse=True,
+        )
+    else:
+        ranked = sorted(
+            limited_per_source,
+            key=lambda item: (item.published is not None, item.published or datetime.min),
+            reverse=True,
+        )
     total_limit = min(MAX_TOTAL_ARTICLES.get(period, 25), MAX_LLM_ARTICLES)
     final_items = ranked[:total_limit]
 
