@@ -170,6 +170,7 @@ def postprocess_digest_html(text: str) -> str:
     text = MARKDOWN_LINK_RE.sub(r'<a href="\2">\1</a>', text)
     text = MARKDOWN_BOLD_RE.sub(r"<b>\1</b>", text)
     text = _remove_prompt_leaks(text)
+    text = _ensure_slogan_label(text)
     text = sanitize_telegram_html(text)
 
     if "**" in text:
@@ -198,10 +199,32 @@ def _remove_prompt_leaks(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _ensure_slogan_label(text: str) -> str:
+    if re.search(r"(?im)^\s*Слоган дайджеста\s*:", text):
+        return text
+
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        plain = re.sub(r"</?i>", "", stripped, flags=re.IGNORECASE).strip()
+        if plain in SLOGAN_PLACEHOLDERS:
+            lines.insert(index, "Слоган дайджеста:")
+            return "\n".join(lines)
+        if stripped.lower().startswith("<i>") and stripped.lower().endswith("</i>"):
+            previous = "\n".join(lines[max(0, index - 3) : index]).lower()
+            following = "\n".join(lines[index + 1 : index + 4]).lower()
+            if "<blockquote>" in previous and "<b>новости</b>" in following:
+                lines.insert(index, "Слоган дайджеста:")
+                return "\n".join(lines)
+    return text
+
+
 def repair_digest_text(text: str) -> str:
     for placeholder in SLOGAN_PLACEHOLDERS:
         text = text.replace(placeholder, _fallback_slogan_from_text(text))
-    return text
+    return _ensure_slogan_label(text)
 
 
 def _has_slogan_placeholder(text: str) -> bool:
@@ -296,6 +319,8 @@ class GigaChatDigestClient:
             "13. Вводный блок и итог должны быть короткими, без длинных рассуждений.",
             "14. Символы <, >, & в обычном тексте не используй вне разрешенных HTML-тегов.",
             "15. Не копируй поясняющие строки шаблона. Вместо описаний из шаблона всегда пиши реальный текст.",
+            "16. Обязательно оставь отдельную строку «Слоган дайджеста:» перед строкой со слоганом.",
+            "17. Слоган пиши на следующей строке после «Слоган дайджеста:» и оформляй его через <i>...</i>.",
             "",
             "Строгий шаблон ответа:",
             f"<b>📰 Дайджест {period_title}</b>",
