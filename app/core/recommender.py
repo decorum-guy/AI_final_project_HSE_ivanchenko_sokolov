@@ -28,7 +28,8 @@ INTEREST_STOPWORDS = {
     "что",
     "это",
 }
-
+MIN_NORMALIZED_KEYWORDS = 2
+MAX_NORMALIZED_KEYWORDS = 8
 
 @dataclass(frozen=True)
 class SourceRecommendation:
@@ -105,8 +106,8 @@ def _normalization_response_format() -> dict:
                 "keywords": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "minItems": 3,
-                    "maxItems": 20,
+                    "minItems": MIN_NORMALIZED_KEYWORDS,
+                    "maxItems": MAX_NORMALIZED_KEYWORDS,
                 },
             },
             "required": ["keywords"],
@@ -123,14 +124,16 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
     prompt = (
         "Ты нормализуешь интересы пользователя для поиска и ранжирования новостей.\n\n"
         f"Интересы пользователя:\n{text}\n\n"
-        "Верни от 3 до 20 ключевых слов или коротких словосочетаний.\n"
+        f"Верни от {MIN_NORMALIZED_KEYWORDS} до {MAX_NORMALIZED_KEYWORDS} ключевых слов или коротких словосочетаний.\n"
         "Правила:\n"
         "1. Пиши на русском языке, если это естественно для термина.\n"
-        "2. Слова приводи к начальной форме: например, «игра» вместо «игры», «театр» вместо «театром».\n"
-        "3. Добавляй полезные синонимы и близкие профессиональные термины.\n"
-        "4. Убирай мусорные слова вроде «люблю», «интересно», «хочу».\n"
-        "5. Не добавляй темы, которых явно нет в интересах пользователя.\n"
-        "6. Ответ строго JSON по схеме."
+        "2. Слова приводи к начальной форме: «культура», «маркетинг», «технологии».\n"
+        "3. Не превращай эмоции в ключевые слова: «люблю», «нравится», «обожаю» нужно удалить.\n"
+        "4. Не расширяй интересы слишком широко и не добавляй дальние ассоциации.\n"
+        "5. Добавляй только темы, которые явно следуют из текста пользователя.\n"
+        "6. Если пользователь пишет «обожаю технологии и культуру», хороший ответ: "
+        "[\"технологии\", \"культура\", \"культурные события\", \"цифровая культура\"].\n"
+        "7. Ответ строго JSON по схеме."
     )
     try:
         logger.info("Normalizing interests with ChatGPT model gpt-5.4-nano")
@@ -147,7 +150,7 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
             raw_keywords = payload.get("keywords") or []
             keywords = parse_keywords(", ".join(str(item) for item in raw_keywords))
             if len(keywords) >= MIN_NORMALIZED_KEYWORDS:
-                return keywords
+                return keywords[:MAX_NORMALIZED_KEYWORDS]
         logger.warning("Interest normalization returned too few keywords, using fallback")
     except Exception as exc:
         logger.exception("Interest normalization failed, using fallback: %s", exc)
