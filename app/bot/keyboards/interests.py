@@ -54,7 +54,7 @@ def recommendations_menu() -> InlineKeyboardMarkup:
 
 def keywords_menu(keywords: list[str]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    button(kb, text="➕ Добавить слово", callback_data="interests:keyword:add", style="success")
+    button(kb, text="➕ Добавить слова", callback_data="interests:keyword:add", style="success")
     if keywords:
         button(kb, text="➖ Удалить слово", callback_data="interests:keyword:delete_menu", style="danger")
     button(kb, text="← Назад", callback_data="interests:show")

@@ -123,7 +123,7 @@ async def edit_keywords_screen(callback: CallbackQuery, state: FSMContext) -> No
         callback.message,
         "🧩 Нормализованные слова\n\n"
         f"{keywords_text(keywords) or 'Пока слов нет.'}\n\n"
-        "Пишите слова в единственном числе и именительном падеже: не «рекламу», а «реклама».",
+        "Пишите слова в начальной форме: например, «игра» вместо «игры», «театр» вместо «театром».",
         reply_markup=keywords_menu(keywords),
     )
 
@@ -135,7 +135,7 @@ async def add_keyword_start(callback: CallbackQuery, state: FSMContext) -> None:
     await safe_edit_message(
         callback.message,
         "Напишите одно слово или несколько слов через запятую.\n\n"
-        "Пожалуйста, используйте единственное число и именительный падеж: «реклама», «пиар», «маркетинг».",
+        "Пожалуйста, используйте начальную форму слова: «игра», «театр», «маркетинг».",
         reply_markup=interests_edit_back(),
     )
 
@@ -196,7 +196,7 @@ async def delete_keyword(callback: CallbackQuery) -> None:
         callback.message,
         "🧩 Нормализованные слова\n\n"
         f"{keywords_text(keywords) or 'Пока слов нет.'}\n\n"
-        "Пишите слова в единственном числе и именительном падеже.",
+        "Пишите слова в начальной форме: «игра», «театр», «маркетинг».",
         reply_markup=keywords_menu(keywords),
     )
 
