@@ -1,33 +1,57 @@
 import time
 
 from aiogram import F, Router
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message
 
-from app.bot.keyboards.digest import digest_actions, digest_mode, digest_period, long_digest_options, refresh_confirm
-from app.bot.keyboards.interests import interests_menu, interests_need_sources
+from app.bot.keyboards.digest import (
+    digest_actions,
+    digest_mode,
+    digest_period,
+    long_digest_options,
+    refresh_confirm,
+    too_many_sources_warning,
+)
+from app.bot.keyboards.history import history_digest
+from app.bot.keyboards.interests import interests_need_sources, interests_need_topics
+from app.bot.keyboards.main import main_menu, main_menu_text
 from app.bot.utils import safe_callback_answer, safe_edit_message
-from app.core.documents import build_digest_docx, build_digest_pdf
 from app.core.digest import build_digest, refresh_digest
+from app.core.digest_delivery import (
+    LONG_DIGEST_TEXT,
+    SAFE_TELEGRAM_LIMIT,
+    SHORTEN_FAILED_TEXT,
+    ensure_digest_html,
+    is_digest_too_long,
+    public_digest_url,
+    split_digest_into_parts,
+)
 from app.core.gigachat_client import GigaChatDigestClient
 from app.db import queries
 from app.db.database import async_session
 
 
 router = Router()
-SAFE_TELEGRAM_LIMIT = 3800
-LONG_DIGEST_TEXT = (
-    "Дайджест получился слишком объемным для одного сообщения Telegram.\n\n"
-    "Можно перегенерировать короткую версию или получить полный файл."
-)
+MANY_SOURCES_THRESHOLD = 8
 
 
 def _shorten_attempts_left(digest) -> int:
     return digest.shorten_attempts_left if digest.shorten_attempts_left is not None else 2
 
 
+async def _digest_html_url(digest) -> str:
+    if digest.html_token and digest.html_path:
+        return public_digest_url(digest.html_token)
+    async with async_session() as session:
+        fresh = await queries.get_digest(session, digest.id, digest.user_id)
+        if not fresh:
+            raise RuntimeError("Digest not found while creating HTML page")
+        token, _ = await ensure_digest_html(session, fresh)
+    return public_digest_url(token)
+
+
 async def _show_digest_or_fallback(message: Message, digest, *, edit: bool = True) -> None:
-    if len(digest.digest_text) > SAFE_TELEGRAM_LIMIT:
-        markup = long_digest_options(digest.id, _shorten_attempts_left(digest))
+    if is_digest_too_long(digest.digest_text):
+        markup = long_digest_options(digest.id, _shorten_attempts_left(digest), await _digest_html_url(digest))
         if edit:
             edited = await safe_edit_message(message, LONG_DIGEST_TEXT, reply_markup=markup)
             if edited:
@@ -43,57 +67,48 @@ async def _show_digest_or_fallback(message: Message, digest, *, edit: bool = Tru
     await message.answer(digest.digest_text, reply_markup=keyboard, disable_web_page_preview=True, parse_mode="HTML")
 
 
-@router.callback_query(F.data == "digest:start")
-async def choose_digest_mode(callback: CallbackQuery) -> None:
-    await safe_callback_answer(callback)
-    await safe_edit_message(
-        callback.message,
-        "Как сформировать дайджест?\n\n"
-        "🎯 По моим интересам — бот берет ваши выбранные источники, но выше ставит новости, которые ближе к вашим темам.\n\n"
-        "📡 По выбранным источникам — бот собирает свежие новости из ваших подписок без дополнительной сортировки по интересам.\n\n"
-        "Важно: ИИ-подбор источников и дайджест по интересам — разные вещи. Подбор источников помогает выбрать подписки, а режим по интересам персонально ранжирует новости внутри уже выбранных источников.",
-        reply_markup=digest_mode(),
+async def _send_digest_parts(message: Message, digest, *, history_page: int | None = None) -> None:
+    parts = split_digest_into_parts(digest.digest_text)
+    if len(parts) <= 1:
+        await _show_digest_or_fallback(message, digest, edit=True)
+        return
+
+    last_markup = (
+        digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite)
+        if history_page is None
+        else history_digest(digest.id, history_page, digest.is_favorite)
     )
 
+    edited = await safe_edit_message(message, parts[0], parse_mode="HTML")
+    start_index = 1 if edited else 0
+    if start_index == 0:
+        await message.answer(parts[0], disable_web_page_preview=True, parse_mode="HTML")
+        start_index = 1
 
-@router.callback_query(F.data.startswith("digest:mode:"))
-async def choose_period(callback: CallbackQuery) -> None:
-    await safe_callback_answer(callback)
-    mode = callback.data.split(":")[2]
+    for index in range(start_index, len(parts)):
+        reply_markup = last_markup if index == len(parts) - 1 else None
+        await message.answer(parts[index], reply_markup=reply_markup, disable_web_page_preview=True, parse_mode="HTML")
+
+
+async def _selected_sources_count(user_id: int) -> int:
     async with async_session() as session:
-        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
-        selected = await queries.selected_sources(session, user.id)
-
-    if mode == "interests":
-        if not user.interests_text:
-            await safe_edit_message(
-                callback.message,
-                "Сначала укажите интересы, чтобы я мог собрать персональный дайджест.",
-                reply_markup=interests_menu(),
-            )
-            return
-        if not selected:
-            await safe_edit_message(
-                callback.message,
-                "У вас пока нет выбранных источников. Я могу подобрать их по вашим интересам.",
-                reply_markup=interests_need_sources(),
-            )
-            return
-
-    if mode == "selected_sources" and not selected:
-        await safe_edit_message(
-            callback.message,
-            "У вас пока нет выбранных источников. Сначала выберите источники для дайджеста.",
-            reply_markup=await __import__("app.bot.handlers.sources", fromlist=["_categories_keyboard"])._categories_keyboard("digest"),
-        )
-        return
-    await safe_edit_message(callback.message, "За какой период подготовить дайджест?", reply_markup=digest_period(mode))
+        user = await queries.get_or_create_user(session, user_id, None)
+        return len(await queries.selected_sources(session, user.id))
 
 
-@router.callback_query(F.data.startswith("digest:period:"))
-async def generate_digest(callback: CallbackQuery) -> None:
-    await safe_callback_answer(callback)
-    _, _, mode, period = callback.data.split(":")
+async def _maybe_warn_about_many_sources(callback: CallbackQuery, mode: str, period: str) -> bool:
+    sources_count = await _selected_sources_count(callback.from_user.id)
+    if sources_count <= MANY_SOURCES_THRESHOLD:
+        return False
+    await safe_edit_message(
+        callback.message,
+        "Вы выбрали много источников. Дайджест может получиться объемным.",
+        reply_markup=too_many_sources_warning(mode, period),
+    )
+    return True
+
+
+async def _run_digest_generation(callback: CallbackQuery, mode: str, period: str) -> None:
     loading = await safe_edit_message(
         callback.message,
         "⏳ Собираю дайджест...\n\nПодготавливаю источники и свежие новости.",
@@ -118,6 +133,69 @@ async def generate_digest(callback: CallbackQuery) -> None:
     await _show_digest_or_fallback(target_message, digest, edit=True)
 
 
+@router.callback_query(F.data == "digest:start")
+async def choose_digest_mode(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+    await safe_edit_message(
+        callback.message,
+        "Как сформировать дайджест?\n\n"
+        "📡 По источникам — бот соберет новости из выбранных RSS-лент.\n\n"
+        "🎯 По интересам — бот использует только выбранные вами источники и сортирует новости по вашим темам.",
+        reply_markup=digest_mode(),
+    )
+
+
+@router.callback_query(F.data.startswith("digest:mode:"))
+async def choose_period(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+    mode = callback.data.split(":")[2]
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        selected = await queries.selected_sources(session, user.id)
+
+    if mode == "interests":
+        if not user.interests_text:
+            await safe_edit_message(
+                callback.message,
+                "Сначала укажите интересы. Потом можно выбрать источники и сформировать дайджест по интересам.",
+                reply_markup=interests_need_topics(),
+            )
+            return
+        if not selected:
+            await safe_edit_message(
+                callback.message,
+                "У вас пока нет выбранных источников. Сначала добавьте их, чтобы сформировать дайджест по интересам.",
+                reply_markup=interests_need_sources(),
+            )
+            return
+
+    if mode == "selected_sources" and not selected:
+        await safe_edit_message(
+            callback.message,
+            "У вас пока нет выбранных источников. Сначала добавьте их, а потом сформируйте дайджест.",
+            reply_markup=interests_need_sources(),
+        )
+        return
+
+    await safe_edit_message(callback.message, "За какой период подготовить дайджест?", reply_markup=digest_period(mode))
+
+
+@router.callback_query(F.data.startswith("digest:period:"))
+async def generate_digest(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+    _, _, mode, period = callback.data.split(":")
+    if await _maybe_warn_about_many_sources(callback, mode, period):
+        return
+    await _run_digest_generation(callback, mode, period)
+
+
+@router.callback_query(F.data.startswith("digest:confirm_large:"))
+async def confirm_large_sources_digest(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+    _, _, mode, period = callback.data.split(":")
+    await _run_digest_generation(callback, mode, period)
+
+
 @router.callback_query(F.data.startswith("fav:fresh:"))
 async def toggle_fresh_favorite(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
@@ -129,7 +207,9 @@ async def toggle_fresh_favorite(callback: CallbackQuery) -> None:
             await safe_callback_answer(callback, "Дайджест не найден", show_alert=True)
             return
         await queries.set_favorite(session, digest, not digest.is_favorite)
-        await callback.message.edit_reply_markup(reply_markup=digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite))
+        await callback.message.edit_reply_markup(
+            reply_markup=digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite)
+        )
 
 
 @router.callback_query(F.data.startswith("fb:"))
@@ -141,6 +221,15 @@ async def feedback(callback: CallbackQuery) -> None:
         digest = await queries.get_digest(session, int(digest_id), user.id)
         if digest:
             await queries.set_feedback(session, digest, value)
+            await callback.message.edit_reply_markup(
+                reply_markup=digest_actions(
+                    digest.id,
+                    digest.refresh_attempts_left,
+                    digest.is_favorite,
+                    include_feedback=False,
+                )
+            )
+    await callback.message.answer(main_menu_text(), reply_markup=main_menu())
 
 
 @router.callback_query(F.data.startswith("refresh:empty:"))
@@ -150,7 +239,20 @@ async def refresh_empty(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("digest:shorten_empty:"))
 async def shorten_empty(callback: CallbackQuery) -> None:
-    await safe_callback_answer(callback, "Лимит укорачивающих генераций исчерпан", show_alert=True)
+    await safe_callback_answer(callback, "Лимит коротких версий исчерпан", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("digest:parts:"))
+async def send_digest_parts(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+    digest_id = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        digest = await queries.get_digest(session, digest_id, user.id)
+        if not digest:
+            await safe_edit_message(callback.message, "Дайджест не найден.")
+            return
+    await _send_digest_parts(callback.message, digest)
 
 
 @router.callback_query(F.data.startswith("digest:shorten:"))
@@ -165,11 +267,13 @@ async def shorten_digest(callback: CallbackQuery) -> None:
             await safe_edit_message(callback.message, "Дайджест не найден.")
             return
         if _shorten_attempts_left(digest) <= 0:
-            await safe_callback_answer(callback, "Лимит укорачивающих генераций исчерпан", show_alert=True)
-            await safe_edit_message(callback.message, LONG_DIGEST_TEXT, reply_markup=long_digest_options(digest.id, 0))
+            await safe_callback_answer(callback, "Лимит коротких версий исчерпан", show_alert=True)
+            await safe_edit_message(
+                callback.message,
+                LONG_DIGEST_TEXT,
+                reply_markup=long_digest_options(digest.id, 0, await _digest_html_url(digest)),
+            )
             return
-        await queries.decrement_shorten(session, digest)
-        await session.refresh(digest)
         try:
             short_text = await GigaChatDigestClient(user.llm_provider).shorten(digest.digest_text)
         except Exception:
@@ -178,54 +282,22 @@ async def shorten_digest(callback: CallbackQuery) -> None:
         if not short_text or len(short_text) > SAFE_TELEGRAM_LIMIT:
             await safe_edit_message(
                 callback.message,
-                LONG_DIGEST_TEXT,
-                reply_markup=long_digest_options(digest.id, _shorten_attempts_left(digest)),
+                SHORTEN_FAILED_TEXT,
+                reply_markup=long_digest_options(
+                    digest.id,
+                    _shorten_attempts_left(digest),
+                    await _digest_html_url(digest),
+                    include_shorten=False,
+                ),
             )
             return
 
+        await queries.decrement_shorten(session, digest)
+        await session.refresh(digest)
         keyboard = digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite)
         edited = await safe_edit_message(callback.message, short_text, reply_markup=keyboard, parse_mode="HTML")
         if not edited:
             await callback.message.answer(short_text, reply_markup=keyboard, disable_web_page_preview=True, parse_mode="HTML")
-
-
-@router.callback_query(F.data.startswith("digest:file:"))
-async def send_digest_file(callback: CallbackQuery) -> None:
-    await safe_callback_answer(callback)
-    _, _, file_type, digest_id_text = callback.data.split(":")
-    digest_id = int(digest_id_text)
-    async with async_session() as session:
-        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
-        digest = await queries.get_digest(session, digest_id, user.id)
-        if not digest:
-            await safe_callback_answer(callback, "Дайджест не найден", show_alert=True)
-            return
-
-    if file_type == "docx":
-        try:
-            content = build_digest_docx(digest)
-        except Exception:
-            await callback.message.answer("Не удалось сформировать DOCX-файл. Попробуйте PDF или короткую версию.")
-            return
-        await callback.message.answer_document(
-            BufferedInputFile(content, filename=f"infopulse_digest_{digest.id}.docx"),
-            caption="Полная версия дайджеста в DOCX.",
-        )
-        return
-
-    if file_type == "pdf":
-        try:
-            content = build_digest_pdf(digest)
-        except Exception:
-            await callback.message.answer("Не удалось сформировать PDF-файл. Попробуйте DOCX или короткую версию.")
-            return
-        await callback.message.answer_document(
-            BufferedInputFile(content, filename=f"infopulse_digest_{digest.id}.pdf"),
-            caption="Полная версия дайджеста в PDF.",
-        )
-        return
-
-    await safe_callback_answer(callback, "Неизвестный формат файла", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("refresh:ask:"))
@@ -233,8 +305,8 @@ async def ask_refresh(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
     digest_id = int(callback.data.split(":")[2])
     await callback.message.answer(
-        "Вы уверены, что хотите проверить новые новости?\n"
-        "Это действие использует одну попытку обновления для текущего дайджеста.",
+        "Проверить новые новости?\n"
+        "Попытка обновления спишется только если найдутся новые материалы и получится собрать новый дайджест.",
         reply_markup=refresh_confirm(digest_id),
     )
 
@@ -268,9 +340,9 @@ async def confirm_refresh(callback: CallbackQuery) -> None:
         if digest.refresh_attempts_left <= 0:
             await callback.message.answer("Попытки обновления для этого дайджеста закончились.")
             return
-        await queries.decrement_refresh(session, digest)
         new_digest = await refresh_digest(session, user, digest)
         if not new_digest:
-            await callback.message.answer("Новых новостей пока нет. Текущий дайджест остается актуальным.")
-        else:
-            await _show_digest_or_fallback(callback.message, new_digest, edit=False)
+            await callback.message.answer("Новых новостей пока нет. Попытка обновления не списана.")
+            return
+        await queries.decrement_refresh(session, digest)
+        await _show_digest_or_fallback(callback.message, new_digest, edit=False)

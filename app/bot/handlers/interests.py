@@ -313,6 +313,10 @@ async def add_recommended_sources(callback: CallbackQuery, state: FSMContext) ->
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         await queries.add_user_sources(session, user.id, list(source_ids))
     await state.clear()
-    from app.bot.handlers.sources import show_subscriptions
+    from app.bot.keyboards.interests import after_recommended_sources_added
 
-    await show_subscriptions(callback, prefix="Источники добавлены.\n\n", answer=False)
+    await safe_edit_message(
+        callback.message,
+        "Источники добавлены. Теперь можно сформировать дайджест.",
+        reply_markup=after_recommended_sources_added(),
+    )

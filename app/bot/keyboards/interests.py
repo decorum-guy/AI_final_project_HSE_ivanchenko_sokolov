@@ -65,7 +65,7 @@ def keywords_menu(keywords: list[str]) -> InlineKeyboardMarkup:
 def keywords_delete_menu(keywords: list[str]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for index, word in enumerate(keywords):
-        button(kb, text=f"✖ {word}", callback_data=f"interests:keyword:delete:{index}", style="danger")
+        button(kb, text=f"➖ {word}", callback_data=f"interests:keyword:delete:{index}", style="danger")
     button(kb, text="← Назад", callback_data="interests:keywords")
     kb.adjust(*([1] * len(keywords)), 1)
     return kb.as_markup()
@@ -89,8 +89,26 @@ def recommendation_review_menu(items: list[tuple[str, str, bool]]) -> InlineKeyb
 
 def interests_need_sources() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    button(kb, text="🤖 Подобрать источники", callback_data="interests:recommend", style="success")
+    button(kb, text="🤖 Подобрать источники по интересам", callback_data="interests:recommend", style="success")
     button(kb, text="📡 Выбрать вручную", callback_data="sources:choose:digest", style="primary")
-    button(kb, text="← Назад", callback_data="digest:start")
+    button(kb, text="🏠 Главное меню", callback_data="menu", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def interests_need_topics() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button(kb, text="Указать интересы", callback_data="interests:edit", style="primary")
+    button(kb, text="Выбрать источники вручную", callback_data="sources:choose:digest", style="primary")
+    button(kb, text="Главное меню", callback_data="menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def after_recommended_sources_added() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button(kb, text="📰 Получить дайджест по интересам", callback_data="digest:mode:interests", style="success")
+    button(kb, text="📡 Изменить источники", callback_data="sources:choose:subs", style="primary")
+    button(kb, text="🏠 Главное меню", callback_data="menu", style="primary")
     kb.adjust(1)
     return kb.as_markup()

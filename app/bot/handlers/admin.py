@@ -326,7 +326,7 @@ async def admin_long_digest(callback: CallbackQuery) -> None:
     await safe_edit_message(
         callback.message,
         "📦 Тест длинного дайджеста\n\n"
-        "Сценарий специально показывает экран MESSAGE_TOO_LONG fallback: перегенерация, DOCX и PDF.",
+        "Сценарий специально показывает экран MESSAGE_TOO_LONG fallback: HTML-страница, отправка частями и укороченная версия.",
         reply_markup=admin_long_mode(),
     )
 

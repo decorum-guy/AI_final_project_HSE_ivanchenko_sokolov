@@ -8,6 +8,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.digest_delivery import ensure_digest_html
 from app.core.gigachat_client import GigaChatDigestClient, repair_digest_text
 from app.core.recommender import filter_by_interests, relevance_score
 from app.core.rss import PERIOD_TITLES, NewsItem, fetch_news
@@ -163,10 +164,14 @@ async def build_digest(
         cached = await queries.cached_digest(session, user.id, period, source_mode, source_signature)
         if cached:
             repaired = repair_digest_text(cached.digest_text)
+            changed = False
             if repaired != cached.digest_text:
                 cached.digest_text = repaired
+                changed = True
+            if changed:
                 await session.commit()
                 await session.refresh(cached)
+            await ensure_digest_html(session, cached)
             return cached
 
     prepared = await prepare_digest_input(session, user, source_mode, period, progress_callback=progress_callback)
@@ -181,7 +186,7 @@ async def build_digest(
             text = f"{prepared.note}\n\n{text}"
         digest_title = await client.history_title(text)
 
-    return await queries.create_digest(
+    digest = await queries.create_digest(
         session=session,
         user_id=user.id,
         text=text,
@@ -191,6 +196,8 @@ async def build_digest(
         digest_title=digest_title,
         source_signature=source_signature,
     )
+    await ensure_digest_html(session, digest)
+    return digest
 
 
 async def refresh_digest(session: AsyncSession, user: User, digest: DigestHistory) -> DigestHistory | None:
@@ -202,7 +209,7 @@ async def refresh_digest(session: AsyncSession, user: User, digest: DigestHistor
     client = GigaChatDigestClient(_user_provider(user))
     text = await client.summarize(new_items, _period_title_with_date(digest.period))
     digest_title = await client.history_title(text)
-    return await queries.create_digest(
+    new_digest = await queries.create_digest(
         session=session,
         user_id=user.id,
         text=text,
@@ -212,3 +219,5 @@ async def refresh_digest(session: AsyncSession, user: User, digest: DigestHistor
         digest_title=digest_title,
         source_signature=await queries.selected_source_signature(session, user.id),
     )
+    await ensure_digest_html(session, new_digest)
+    return new_digest

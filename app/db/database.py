@@ -44,3 +44,7 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE digest_history ADD COLUMN digest_title VARCHAR(120)"))
         if "source_signature" not in existing_digest_columns:
             await conn.execute(text("ALTER TABLE digest_history ADD COLUMN source_signature TEXT"))
+        if "html_token" not in existing_digest_columns:
+            await conn.execute(text("ALTER TABLE digest_history ADD COLUMN html_token VARCHAR(120)"))
+        if "html_path" not in existing_digest_columns:
+            await conn.execute(text("ALTER TABLE digest_history ADD COLUMN html_path TEXT"))

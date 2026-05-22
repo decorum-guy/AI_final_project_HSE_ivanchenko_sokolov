@@ -274,6 +274,8 @@ async def create_digest(
     used_links: list[str],
     digest_title: str | None = None,
     source_signature: str | None = None,
+    html_token: str | None = None,
+    html_path: str | None = None,
 ) -> DigestHistory:
     digest = DigestHistory(
         user_id=user_id,
@@ -283,6 +285,8 @@ async def create_digest(
         source_mode=source_mode,
         source_signature=source_signature,
         used_links="\n".join(used_links),
+        html_token=html_token,
+        html_path=html_path,
     )
     session.add(digest)
     await session.commit()
@@ -292,6 +296,10 @@ async def create_digest(
 
 async def get_digest(session: AsyncSession, digest_id: int, user_id: int) -> DigestHistory | None:
     return await session.scalar(select(DigestHistory).where(DigestHistory.id == digest_id, DigestHistory.user_id == user_id))
+
+
+async def get_digest_by_html_token(session: AsyncSession, token: str) -> DigestHistory | None:
+    return await session.scalar(select(DigestHistory).where(DigestHistory.html_token == token))
 
 
 async def cached_digest(session: AsyncSession, user_id: int, period: str, source_mode: str, source_signature: str | None = None) -> DigestHistory | None:
@@ -337,6 +345,12 @@ async def decrement_refresh(session: AsyncSession, digest: DigestHistory) -> Non
 async def decrement_shorten(session: AsyncSession, digest: DigestHistory) -> None:
     attempts_left = digest.shorten_attempts_left if digest.shorten_attempts_left is not None else 2
     digest.shorten_attempts_left = max(0, attempts_left - 1)
+    await session.commit()
+
+
+async def save_digest_html(session: AsyncSession, digest: DigestHistory, token: str, path: str) -> None:
+    digest.html_token = token
+    digest.html_path = path
     await session.commit()
 
 

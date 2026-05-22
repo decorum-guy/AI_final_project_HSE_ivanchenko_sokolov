@@ -95,26 +95,48 @@ async def ask_chatgpt(
         raise RuntimeError("OPENAI_API_KEY is empty")
 
     selected_model = model or _select_openai_model()
+    token_limit_parameter = "max_completion_tokens" if selected_model.startswith("gpt-5") else "max_tokens"
     request_payload: dict[str, Any] = {
         "model": selected_model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    request_payload[token_limit_parameter] = max_tokens
     openai_response_format = _openai_response_format(response_format)
     if openai_response_format:
         request_payload["response_format"] = openai_response_format
 
     async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            f"{settings.openai_base_url.rstrip('/')}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            json=request_payload,
-        )
-        response.raise_for_status()
+        try:
+            response = await client.post(
+                f"{settings.openai_base_url.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=request_payload,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            logger.error(
+                "OpenAI request failed: status=%s model=%s prompt_chars=%s token_param=%s response_preview=%r",
+                response.status_code,
+                selected_model,
+                len(prompt),
+                token_limit_parameter,
+                response.text[:2000],
+            )
+            raise
+        except httpx.HTTPError as exc:
+            logger.error(
+                "OpenAI request error: model=%s prompt_chars=%s token_param=%s error=%s",
+                selected_model,
+                len(prompt),
+                token_limit_parameter,
+                exc,
+            )
+            raise
         payload = response.json()
     _record_openai_usage(payload, selected_model)
 
@@ -272,7 +294,7 @@ def postprocess_digest_html(text: str) -> str:
     text = MARKDOWN_LINK_RE.sub(r'<a href="\2">\1</a>', text)
     text = MARKDOWN_BOLD_RE.sub(r"<b>\1</b>", text)
     text = _remove_prompt_leaks(text)
-    text = _ensure_slogan_label(text)
+    text = _normalize_digest_structure(text)
     text = sanitize_telegram_html(text)
 
     if "**" in text:
@@ -324,9 +346,19 @@ def _ensure_slogan_label(text: str) -> str:
 
 
 def repair_digest_text(text: str) -> str:
-    for placeholder in SLOGAN_PLACEHOLDERS:
-        text = text.replace(placeholder, _fallback_slogan_from_text(text))
-    return _ensure_slogan_label(text)
+    return _normalize_digest_structure(text)
+
+
+def _normalize_digest_structure(text: str) -> str:
+    text = re.sub(
+        r"(?ims)^\s*Слоган дайджеста\s*:\s*\n?\s*(?:<i>.*?</i>|.+?)\s*(?=\n\s*<b>(?:Новости|Подробно)</b>)",
+        "",
+        text,
+    )
+    text = re.sub(r"(?i)<b>\s*Новости\s*</b>", "<b>Подробно</b>", text)
+    text = re.sub(r"(?m)^Кратко:\s*", "<b>Кратко:</b> ", text)
+    text = re.sub(r"(?m)^Почему важно:\s*", "<b>Почему важно:</b> ", text)
+    return text.strip()
 
 
 def _has_slogan_placeholder(text: str) -> bool:
@@ -346,7 +378,7 @@ def _fallback_slogan_from_text(text: str) -> str:
 
 
 def _has_early_summary(text: str) -> bool:
-    news_index = text.lower().find("<b>новости</b>")
+    news_index = text.lower().find("<b>подробно</b>")
     summary_index = text.lower().find("<b>итог</b>")
     return summary_index != -1 and (news_index == -1 or summary_index < news_index)
 
@@ -355,16 +387,18 @@ def _log_digest_quality(text: str) -> None:
     lowered = text.lower()
     if "```" in text or "##" in text or re.search(r"\[[^\]]+]\(https?://", text):
         logger.warning("Digest structure warning: markdown markers are still present")
-    if lowered.count("<b>новости</b>") > 1:
-        logger.warning("Digest structure warning: multiple news blocks found")
-    if "<b>новости</b>" not in lowered:
-        logger.warning("Digest structure warning: news block is missing")
+    if "слоган дайджеста" in lowered:
+        logger.warning("Digest structure warning: slogan block is still present")
+    if lowered.count("<b>подробно</b>") > 1:
+        logger.warning("Digest structure warning: multiple details blocks found")
+    if "<b>подробно</b>" not in lowered:
+        logger.warning("Digest structure warning: details block is missing")
     if "<b>итог</b>" not in lowered:
         logger.warning("Digest structure warning: final summary block is missing")
 
     news_blocks = re.findall(r"<b>\d+\.\s+.+?</b>(.*?)(?=<b>\d+\.\s+|<b>итог</b>|$)", text, flags=re.DOTALL | re.IGNORECASE)
     for index, block in enumerate(news_blocks, start=1):
-        missing = [label for label in ("Кратко:", "Почему важно:", "Источник:") if label not in block]
+        missing = [label for label in ("<b>Кратко:</b>", "<b>Почему важно:</b>", "Источник:") if label not in block]
         if missing:
             logger.warning("Digest structure warning: news #%s missing labels: %s", index, ", ".join(missing))
 
@@ -377,23 +411,20 @@ class GigaChatDigestClient:
     async def summarize(self, items: list[NewsItem], period_title: str) -> str:
         if self.provider == "gigachat" and not self.settings.gigachat_credentials:
             logger.warning("GIGACHAT_CREDENTIALS is empty, using fallback digest")
-            return self._fallback_digest(items, period_title)
+            return repair_digest_text(self._fallback_digest(items, period_title))
         if self.provider == "chatgpt" and not self.settings.openai_api_key:
             logger.warning("OPENAI_API_KEY is empty, using fallback digest")
-            return self._fallback_digest(items, period_title)
+            return repair_digest_text(self._fallback_digest(items, period_title))
 
         prompt = self._build_digest_prompt(items, period_title)
-        logger.info("Sending digest prompt to GigaChat: items=%s chars=%s", len(items), len(prompt))
+        logger.info("Sending digest prompt to AI provider: provider=%s items=%s chars=%s", self.provider, len(items), len(prompt))
         try:
             answer = await ask_llm(prompt, provider=self.provider, max_tokens=2600, temperature=0.15)
             text = postprocess_digest_html(answer)
-            if _has_slogan_placeholder(text):
-                logger.warning("GigaChat copied digest slogan placeholder; regenerating slogan")
-                text = await self._replace_placeholder_slogan(text)
             return repair_digest_text(text)
         except Exception as exc:
-            logger.exception("GigaChat digest request failed, using fallback: %s", exc)
-            return self._fallback_digest(items, period_title)
+            logger.exception("AI digest request failed, using fallback: %s", exc)
+            return repair_digest_text(self._fallback_digest(items, period_title))
 
     def _build_digest_prompt(self, items: list[NewsItem], period_title: str) -> str:
         lines = [
@@ -401,7 +432,7 @@ class GigaChatDigestClient:
             "",
             f"Период: {period_title}.",
             "",
-            "Сформируй дайджест на русском языке только в формате Telegram-compatible HTML.",
+            "Сформируй короткий дайджест на русском языке только в формате Telegram-compatible HTML.",
             "Длина ответа: не больше 3300–3600 символов.",
             "Количество новостей: максимум 7–8 главных новостей.",
             "",
@@ -412,36 +443,33 @@ class GigaChatDigestClient:
             "4. Цитаты оформляй только через <blockquote>...</blockquote>.",
             "5. Ссылки оформляй только как <a href=\"URL\">Название источника</a>.",
             "6. Не выводи голые URL.",
-            "7. Не добавляй второй блок «Новости».",
-            "8. Не ставь «Итог» до списка новостей. Итог должен быть только в самом конце.",
-            "9. Каждая новость обязательно должна иметь строки «Кратко:», «Почему важно:» и «Источник:».",
-            "10. Каждая строка «Кратко» — одно короткое предложение.",
-            "11. Каждая строка «Почему важно» — одно короткое предложение.",
-            "12. Не делай новости только из заголовка и ссылки.",
-            "13. Вводный блок и итог должны быть короткими, без длинных рассуждений.",
-            "14. Символы <, >, & в обычном тексте не используй вне разрешенных HTML-тегов.",
-            "15. Не копируй поясняющие строки шаблона. Вместо описаний из шаблона всегда пиши реальный текст.",
-            "16. Обязательно оставь отдельную строку «Слоган дайджеста:» перед строкой со слоганом.",
-            "17. Слоган пиши на следующей строке после «Слоган дайджеста:» и оформляй его через <i>...</i>.",
+            "7. Не используй слово «Новости» как отдельный заголовок блока. Вместо него всегда используй <b>Подробно</b>.",
+            "8. Не добавляй слоган и не используй строку «Слоган дайджеста».",
+            "9. Не ставь «Итог» до списка новостей. Итог должен быть только в самом конце.",
+            "10. Каждая новость обязательно должна иметь строки <b>Кратко:</b>, <b>Почему важно:</b> и Источник:.",
+            "11. Каждая строка <b>Кратко:</b> — одно короткое предложение.",
+            "12. Каждая строка <b>Почему важно:</b> — одно короткое предложение.",
+            "13. Не делай новости только из заголовка и ссылки.",
+            "14. Вводный блок и итог должны быть короткими, без длинных рассуждений.",
+            "15. Символы <, >, & в обычном тексте не используй вне разрешенных HTML-тегов.",
+            "16. Не копируй поясняющие строки шаблона. Вместо описаний из шаблона всегда пиши реальный текст.",
             "",
             "Строгий шаблон ответа:",
             f"<b>📰 Дайджест {period_title}</b>",
             "",
-            "<blockquote>Главная суть дайджеста в двух коротких предложениях.</blockquote>",
+            "<b>Очень кратко</b>",
+            "<blockquote>Главные события периода в двух коротких предложениях.</blockquote>",
             "",
-            "Слоган дайджеста:",
-            "<i>Конкретный короткий слоган по темам новостей.</i>",
-            "",
-            "<b>Новости</b>",
+            "<b>Подробно</b>",
             "",
             "<b>1. Заголовок</b>",
-            "Кратко: 1–2 предложения.",
-            "Почему важно: 1 предложение.",
+            "<b>Кратко:</b> 1 короткое предложение.",
+            "<b>Почему важно:</b> 1 короткое предложение.",
             "Источник: <a href=\"URL\">Название источника</a>",
             "",
             "<b>2. Следующая новость</b>",
-            "Кратко: 1–2 предложения.",
-            "Почему важно: 1 предложение.",
+            "<b>Кратко:</b> 1 короткое предложение.",
+            "<b>Почему важно:</b> 1 короткое предложение.",
             "Источник: <a href=\"URL\">Название источника</a>",
             "",
             "<b>Итог</b>",
@@ -488,8 +516,9 @@ class GigaChatDigestClient:
             "Сожми этот дайджест до 3000 символов.\n"
             "Сохрани Telegram-compatible HTML-разметку, ссылки и 5–7 главных новостей.\n"
             "Не используй Markdown, ``` и голые URL.\n"
-            "Структура должна быть такой же: заголовок, blockquote, слоган, <b>Новости</b>, новости, <b>Итог</b>.\n"
-            "Каждая новость должна иметь «Кратко:», «Почему важно:», «Источник:».\n\n"
+            "Структура должна быть такой: заголовок, <b>Очень кратко</b>, blockquote, <b>Подробно</b>, новости, <b>Итог</b>.\n"
+            "Не добавляй слоган и не используй заголовок «Новости».\n"
+            "Каждая новость должна иметь <b>Кратко:</b>, <b>Почему важно:</b>, Источник:.\n\n"
             f"Дайджест:\n{digest_text}"
         )
         answer = await ask_llm(prompt, provider=self.provider, max_tokens=2200, temperature=0.1)
@@ -516,24 +545,20 @@ class GigaChatDigestClient:
         if not items:
             return (
                 f"<b>📰 Дайджест {escape(period_title)}</b>\n\n"
+                "<b>Очень кратко</b>\n"
                 "<blockquote>Подходящих новостей пока не найдено.</blockquote>\n\n"
-                "Слоган дайджеста:\n"
-                "<i>Сегодня новостная пауза — тоже часть повестки.</i>\n\n"
-                "<b>Новости</b>\n\n"
+                "<b>Подробно</b>\n\n"
                 "<b>Итог</b>\n"
                 "<blockquote>Попробуйте выбрать другой период или добавить источники.</blockquote>"
             )
 
-        slogan = self._fallback_slogan(items)
         lines = [
             f"<b>📰 Дайджест {escape(period_title)}</b>",
             "",
-            "<blockquote>Собрал свежие новости из выбранных RSS-источников.</blockquote>",
+            "<b>Очень кратко</b>",
+            "<blockquote>Резервная версия сформирована автоматически по выбранным RSS-источникам.</blockquote>",
             "",
-            "Слоган дайджеста:",
-            f"<i>{escape(slogan)}</i>",
-            "",
-            "<b>Новости</b>",
+            "<b>Подробно</b>",
             "",
         ]
         for index, item in enumerate(items[:12], start=1):
@@ -548,14 +573,14 @@ class GigaChatDigestClient:
             lines.extend(
                 [
                     f"<b>{index}. {title}</b>",
-                    f"Кратко: {summary}",
-                    f"Почему важно: материал относится к выбранной повестке за период, дата: {escape(published)}.",
+                    f"<b>Кратко:</b> {summary}",
+                    f"<b>Почему важно:</b> материал относится к выбранной повестке за период, дата: {escape(published)}.",
                     source_line,
                     "",
                 ]
             )
         lines.append("<b>Итог</b>")
-        lines.append("<blockquote>Это резервная версия дайджеста из RSS-заголовков, потому что GigaChat сейчас недоступен.</blockquote>")
+        lines.append("<blockquote>Резервная версия сформирована автоматически, потому что ИИ-сервис временно недоступен.</blockquote>")
         return "\n".join(lines)
 
     def _fallback_slogan(self, items: list[NewsItem]) -> str:

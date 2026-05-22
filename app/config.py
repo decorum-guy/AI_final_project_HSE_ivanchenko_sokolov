@@ -1,11 +1,15 @@
 from functools import lru_cache
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_PATH = PROJECT_ROOT / ".env"
+
+load_dotenv(ENV_PATH, override=False, encoding="utf-8-sig")
 
 
 OPENAI_MODEL_CHOICES = ("gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano")
@@ -25,8 +29,13 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./bot.db"
     admin_id: int | None = None
     log_level: str = "INFO"
+    public_base_url: str = "http://127.0.0.1:8080"
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+    env_file=str(ENV_PATH),
+    env_file_encoding="utf-8-sig",
+    extra="ignore",
+    )
 
     @field_validator("admin_id", mode="before")
     @classmethod
@@ -83,6 +92,12 @@ class Settings(BaseSettings):
         if value == "":
             return False
         return value
+
+    @field_validator("public_base_url", mode="before")
+    @classmethod
+    def normalize_public_base_url(cls, value):
+        value = str(value or "http://127.0.0.1:8080").strip()
+        return value.rstrip("/")
 
 
 @lru_cache

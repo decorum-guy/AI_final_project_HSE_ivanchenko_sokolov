@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.db.database import async_session, init_db
 from app.db.queries import seed_sources
+from app.web.server import start_web_server, stop_web_server
 
 
 async def main() -> None:
@@ -26,11 +27,13 @@ async def main() -> None:
     dp.message.middleware(UserActivityMiddleware())
     dp.callback_query.middleware(UserActivityMiddleware())
     dp.include_router(setup_routers())
+    await start_web_server()
     await start_scheduler(bot)
     try:
         await dp.start_polling(bot)
     finally:
         await stop_scheduler()
+        await stop_web_server()
         await bot.session.close()
 
 

@@ -3,7 +3,7 @@ from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.keyboards.digest import digest_period
-from app.bot.keyboards.main import main_menu
+from app.bot.keyboards.main import main_menu, main_menu_text
 from app.bot.keyboards.styles import button
 from app.bot.utils import safe_callback_answer
 from app.db import queries
@@ -83,6 +83,7 @@ async def _open_categories(callback: CallbackQuery, context: str) -> None:
     await callback.message.edit_text(
         "📡 Выбор источников\n\n"
         "Рядом с категорией показано, сколько источников выбрано: X/Y.\n\n"
+        "Оптимально выбрать 3–7 источников. Если выбрать слишком много, дайджест может получиться длинным.\n\n"
         "Сначала выберите категорию:",
         reply_markup=await _categories_keyboard(context, user.id),
     )
@@ -123,7 +124,8 @@ async def category_screen(callback: CallbackQuery) -> None:
         f"📡 {category}\n\n"
         "Выберите источники для дайджеста.\n"
         "Нажмите на источник, чтобы добавить или убрать его.\n\n"
-        "✅ — источник выбран, ☐ — источник не выбран."
+        "✅ — источник выбран, ☐ — источник не выбран.\n\n"
+        "Оптимально выбрать 3–7 источников. Если выбрать слишком много, дайджест может получиться длинным."
         f"{description_block}",
         reply_markup=await _sources_keyboard(user.id, context, category_index, category),
     )
@@ -162,7 +164,7 @@ async def sources_done(callback: CallbackQuery) -> None:
     elif context == "subs":
         await show_subscriptions(callback, prefix="Источники обновлены.\n\n")
     else:
-        await callback.message.edit_text("Источники обновлены.", reply_markup=main_menu())
+        await callback.message.edit_text(f"Источники обновлены.\n\n{main_menu_text()}", reply_markup=main_menu())
 
 
 @router.callback_query(F.data == "subs:show")
@@ -177,16 +179,25 @@ async def show_subscriptions(callback: CallbackQuery, prefix: str = "", answer: 
         sources = await queries.selected_sources(session, user.id)
     kb = InlineKeyboardBuilder()
     if not sources:
-        text = f"{prefix}⭐ Мои подписки\n\nВы пока не выбрали источники."
-        button(kb, text="📡 Выбрать источники", callback_data="sources:choose:subs", style="primary")
+        text = (
+            f"{prefix}⭐ Мои подписки\n\n"
+            "У вас пока нет выбранных источников. Добавьте их, чтобы бот мог собрать дайджест."
+        )
+        button(kb, text="🤖 Подобрать источники по интересам", callback_data="interests:recommend", style="success")
+        button(kb, text="📡 Выбрать вручную", callback_data="sources:choose:subs", style="primary")
     else:
         lines = "\n".join(
             f"✅ {source.title}" + (f"\n   {source.description}" if source.description else "")
             for source in sources
         )
-        text = f"{prefix}⭐ Мои подписки\n\nВы выбрали источники:\n\n{lines}"
+        text = (
+            f"{prefix}⭐ Мои подписки\n\n"
+            f"Вы выбрали источники:\n\n{lines}\n\n"
+            "Теперь можно сформировать дайджест или скорректировать список."
+        )
         button(kb, text="📡 Изменить источники", callback_data="sources:choose:subs", style="primary")
-    button(kb, text="← Назад", callback_data="menu")
+        button(kb, text="📰 Получить дайджест", callback_data="digest:start", style="success")
+    button(kb, text="🏠 Главное меню", callback_data="menu", style="primary")
     kb.adjust(1)
     await callback.message.edit_text(text, reply_markup=kb.as_markup())
     if answer:

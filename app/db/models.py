@@ -68,5 +68,7 @@ class DigestHistory(Base):
     feedback: Mapped[str | None] = mapped_column(String(16), nullable=True)
     feedback_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     used_links: Mapped[str | None] = mapped_column(Text, nullable=True)
+    html_token: Mapped[str | None] = mapped_column(String(120), nullable=True, unique=True, index=True)
+    html_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="digests")
