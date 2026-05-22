@@ -13,7 +13,7 @@ def main_menu_text() -> str:
         "Как получить дайджест:\n"
         "1. Добавьте или измените интересы.\n"
         "2. Подберите или измените источники через ИИ или вручную.\n"
-        "3. Нажмите «Получить дайджест сейчас».\n"
+        "3. Нажмите «Получить дайджест».\n"
         "4. Выберите режим и период.\n\n"
         "Интересы не заменяют источники: они помогают точнее отсортировать новости внутри выбранных лент."
     )
@@ -21,7 +21,7 @@ def main_menu_text() -> str:
 
 def main_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    button(kb, text="📰 Получить дайджест сейчас", callback_data="digest:start", style="primary")
+    button(kb, text="📰 Получить дайджест", callback_data="digest:start", style="primary")
     button(kb, text="🎯 Интересы", callback_data="interests:show")
     button(kb, text="📡 Источники", callback_data="sources:show")
     button(kb, text="⭐ Подписки", callback_data="subs:show")
