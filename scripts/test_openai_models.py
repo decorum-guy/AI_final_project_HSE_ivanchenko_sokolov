@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-import traceback
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -13,7 +13,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.config import get_settings
-from app.core.gigachat_client import ask_chatgpt
 
 
 def print_settings_info() -> None:
@@ -28,9 +27,27 @@ def print_settings_info() -> None:
     print()
 
 
-def print_http_error(error: httpx.HTTPStatusError) -> None:
-    response = error.response
+def build_payload(model: str, temperature: float) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Ответь одним словом: ok",
+            }
+        ],
+        "temperature": temperature,
+    }
 
+    if model.startswith("gpt-5"):
+        payload["max_completion_tokens"] = 10
+    else:
+        payload["max_tokens"] = 10
+
+    return payload
+
+
+def print_error_response(response: httpx.Response) -> None:
     print("Ошибка HTTP от OpenAI:")
     print(f"Код статуса: {response.status_code}")
     print(f"URL запроса: {response.request.url}")
@@ -50,24 +67,49 @@ def print_http_error(error: httpx.HTTPStatusError) -> None:
     print()
 
 
-async def test_model(model: str) -> bool:
-    print(f"Проверяю модель: {model}")
+async def test_model(model: str, temperature: float) -> bool:
+    settings = get_settings()
 
-    try:
-        answer = await ask_chatgpt(
-            "Ответь одним словом: ok",
-            model=model,
-            max_tokens=10,
-            temperature=0,
+    if not settings.openai_api_key:
+        print("OPENAI_API_KEY не указан.")
+        return False
+
+    print(f"Проверяю модель: {model}")
+    print(f"Проверяю temperature: {temperature}")
+
+    payload = build_payload(model, temperature)
+
+    print("Payload:")
+    safe_payload = dict(payload)
+    print(json.dumps(safe_payload, ensure_ascii=False, indent=2))
+    print()
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            f"{settings.openai_base_url.rstrip('/')}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
         )
-    except httpx.HTTPStatusError as error:
-        print_http_error(error)
+
+    if response.status_code >= 400:
+        print_error_response(response)
         return False
-    except Exception:
-        print("Неожиданная ошибка:")
-        traceback.print_exc()
-        print()
+
+    data = response.json()
+
+    print("Ответ OpenAI:")
+    print(json.dumps(data, ensure_ascii=False, indent=2))
+    print()
+
+    choices = data.get("choices") or []
+    if not choices:
+        print("Ошибка: OpenAI вернул пустой choices.")
         return False
+
+    answer = (choices[0].get("message") or {}).get("content", "")
 
     print(f"Ответ модели {model}: {answer}")
     print()
@@ -83,22 +125,32 @@ async def main() -> None:
         settings.openai_fallback_model,
     ]
 
-    seen: set[str] = set()
+    temperatures = [
+        0,
+        0.2,
+    ]
+
+    seen: set[tuple[str, float]] = set()
     has_success = False
 
     for model in models:
-        if not model or model in seen:
+        if not model:
             continue
 
-        seen.add(model)
-        ok = await test_model(model)
-        has_success = has_success or ok
+        for temperature in temperatures:
+            key = (model, temperature)
+            if key in seen:
+                continue
+
+            seen.add(key)
+            ok = await test_model(model, temperature)
+            has_success = has_success or ok
 
     if not has_success:
         print("Ни одна модель OpenAI не сработала.")
         sys.exit(1)
 
-    print("Хотя бы одна модель OpenAI работает.")
+    print("Хотя бы один тест OpenAI прошел успешно.")
 
 
 if __name__ == "__main__":
