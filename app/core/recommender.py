@@ -48,7 +48,7 @@ def _normalize_keyword_word(word: str) -> str:
         "рекламы": "реклама",
         "игры": "игра",
         "игру": "игра",
-        "технологии": "технология",
+        "технологии": "технологии",
     }
     if word in replacements:
         return replacements[word]
