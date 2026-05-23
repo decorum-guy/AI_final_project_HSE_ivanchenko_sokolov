@@ -15,6 +15,7 @@ from app.db.models import NewsSource
 logger = logging.getLogger(__name__)
 POPULAR_CATEGORIES = {"it", "бизнес", "технологии", "наука", "международные"}
 MIN_VALID_LLM_RECOMMENDATIONS = 3
+MAX_SOURCE_RECOMMENDATIONS = 8
 MIN_NORMALIZED_KEYWORDS = 3
 INTEREST_STOPWORDS = {
     "люблю",
@@ -401,10 +402,10 @@ def _parse_recommendation_response(answer: str, valid_source_ids: set[str]) -> t
         reason = str(item.get("reason", "")).strip() or "Подходит по интересам пользователя."
         recommendations.append(SourceRecommendation(source_id=source_id, reason=reason))
         seen.add(source_id)
-        if len(recommendations) >= 10:
+        if len(recommendations) >= MAX_SOURCE_RECOMMENDATIONS:
             break
 
-    return recommendations[:10], invalid_count
+    return recommendations[:MAX_SOURCE_RECOMMENDATIONS], invalid_count
 
 
 def fallback_recommend_sources(interests_text: str, sources: list[NewsSource]) -> list[SourceRecommendation]:
@@ -417,7 +418,7 @@ def fallback_recommend_sources(interests_text: str, sources: list[NewsSource]) -
             scored.append((score, source))
 
     scored.sort(key=lambda pair: (pair[0], pair[1].title), reverse=True)
-    chosen = [source for _, source in scored[:10]]
+    chosen = [source for _, source in scored[:MAX_SOURCE_RECOMMENDATIONS]]
     if len(chosen) < 5:
         existing = {source.source_id for source in chosen}
         for source in sources:
@@ -426,7 +427,7 @@ def fallback_recommend_sources(interests_text: str, sources: list[NewsSource]) -
             if source.category.lower() in POPULAR_CATEGORIES:
                 chosen.append(source)
                 existing.add(source.source_id)
-            if len(chosen) >= 10:
+            if len(chosen) >= MAX_SOURCE_RECOMMENDATIONS:
                 break
     if len(chosen) < 5:
         existing = {source.source_id for source in chosen}
@@ -434,7 +435,7 @@ def fallback_recommend_sources(interests_text: str, sources: list[NewsSource]) -
             if source.source_id not in existing:
                 chosen.append(source)
                 existing.add(source.source_id)
-            if len(chosen) >= 10:
+            if len(chosen) >= MAX_SOURCE_RECOMMENDATIONS:
                 break
 
     return [
@@ -442,7 +443,7 @@ def fallback_recommend_sources(interests_text: str, sources: list[NewsSource]) -
             source_id=source.source_id,
             reason=f"Подходит по категории «{source.category}» и описанию источника.",
         )
-        for source in chosen[:10]
+        for source in chosen[:MAX_SOURCE_RECOMMENDATIONS]
     ]
 
 
@@ -463,7 +464,7 @@ def _build_recommendation_prompt(interests_text: str, sources: list[NewsSource])
         "Ты — помощник по подбору RSS-источников для персонального новостного дайджеста.\n\n"
         f"Интересы пользователя:\n{interests_text}\n\n"
         f"Список доступных источников:\n{sources_list}\n\n"
-        "Выбери от 5 до 10 наиболее подходящих источников.\n\n"
+        f"Выбери от 5 до {MAX_SOURCE_RECOMMENDATIONS} наиболее подходящих источников.\n\n"
         "Правила:\n"
         "1. Выбирай только source_id из переданного списка.\n"
         "2. Не придумывай новые источники.\n"
