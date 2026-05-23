@@ -1,3 +1,4 @@
+# DEPRECATED: используйте scripts/debug_rss_fetch.py для точечной проверки RSS тем же fetcher-кодом и headers бота.
 from __future__ import annotations
 
 import argparse

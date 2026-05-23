@@ -12,8 +12,10 @@ import feedparser
 logger = logging.getLogger(__name__)
 
 DEFAULT_RSS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 RSSValidator/1.0 (compatible; news digest bot source checker)",
+    "User-Agent": "Mozilla/5.0 (compatible; NewsDigestBot/1.0; +https://example.com)",
     "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+    "Cache-Control": "no-cache",
 }
 
 
