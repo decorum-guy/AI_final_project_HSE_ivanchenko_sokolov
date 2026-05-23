@@ -224,6 +224,14 @@ async def delete_keyword(callback: CallbackQuery) -> None:
         if 0 <= index < len(keywords):
             keywords.pop(index)
             await queries.save_interests_keywords(session, user, keywords)
+    if keywords:
+        await safe_edit_message(
+            callback.message,
+            "Выберите следующее слово, которое нужно удалить:\n\n"
+            f"{keywords_text(keywords)}",
+            reply_markup=keywords_delete_menu(keywords),
+        )
+        return
     await safe_edit_message(
         callback.message,
         "🧩 Нормализованные слова\n\n"
