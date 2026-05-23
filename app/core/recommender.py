@@ -7,13 +7,14 @@ from dataclasses import dataclass
 
 from app.config import get_settings
 from app.core.gigachat_client import ask_llm
+from app.core.llm_debug import log_llm_event
 from app.core.rss import NewsItem
 from app.db.models import NewsSource
 
 
 logger = logging.getLogger(__name__)
 POPULAR_CATEGORIES = {"it", "бизнес", "технологии", "наука", "международные"}
-MIN_VALID_GIGACHAT_RECOMMENDATIONS = 3
+MIN_VALID_LLM_RECOMMENDATIONS = 3
 MIN_NORMALIZED_KEYWORDS = 3
 INTEREST_STOPWORDS = {
     "люблю",
@@ -148,15 +149,40 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
             max_tokens=500,
             temperature=0.1,
             response_format=_normalization_response_format(),
+            task="interest_normalization",
         )
-        payload = extract_json_object(answer)
+        payload = extract_json_object(answer, task="interest_normalization")
         if isinstance(payload, dict):
             raw_keywords = payload.get("keywords") or []
             keywords = parse_keywords(", ".join(str(item) for item in raw_keywords))
+            log_llm_event(
+                task="interest_normalization",
+                event="parsed",
+                provider="chatgpt",
+                model="gpt-5.4-nano",
+                raw_answer=answer,
+                parsed_summary={"keywords_count": len(keywords), "raw_keywords_count": len(raw_keywords)},
+            )
             if len(keywords) >= MIN_NORMALIZED_KEYWORDS:
                 return keywords[:MAX_NORMALIZED_KEYWORDS]
+        log_llm_event(
+            task="interest_normalization",
+            event="fallback",
+            provider="chatgpt",
+            model="gpt-5.4-nano",
+            raw_answer=answer,
+            fallback_reason="too_few_keywords_or_parse_error",
+        )
         logger.warning("Interest normalization returned too few keywords, using fallback")
     except Exception as exc:
+        log_llm_event(
+            task="interest_normalization",
+            event="fallback",
+            provider="chatgpt",
+            model="gpt-5.4-nano",
+            error=exc,
+            fallback_reason="llm_request_failed",
+        )
         logger.exception("Interest normalization failed, using fallback: %s", exc)
     return fallback_normalize_interests(text)
 
@@ -211,32 +237,44 @@ def _recommendation_response_format() -> dict:
     }
 
 
-def _can_use_provider(provider: str | None) -> bool:
-    settings = get_settings()
-    selected = (provider or settings.ai_provider or "gigachat").lower()
-    if selected == "chatgpt":
-        return bool(settings.openai_api_key)
-    return bool(settings.gigachat_credentials)
-
-
 async def recommend_sources(interests_text: str, sources: list[NewsSource], provider: str | None = None) -> list[SourceRecommendation]:
     active_sources = [source for source in sources if source.is_active]
     valid_source_ids = {source.source_id for source in active_sources}
-    selected_provider = (provider or get_settings().ai_provider or "gigachat").lower()
-    provider_title = "ChatGPT" if selected_provider == "chatgpt" else "GigaChat"
-    if _can_use_provider(selected_provider) and active_sources:
+    settings = get_settings()
+    selected_provider = "chatgpt"
+    selected_model = "gpt-5.4-nano"
+    if settings.openai_api_key and active_sources:
         prompt = _build_recommendation_prompt(interests_text, active_sources)
-        logger.info("Sending recommendation prompt to %s: sources=%s chars=%s", provider_title, len(active_sources), len(prompt))
+        logger.info(
+            "Sending source recommendation prompt to ChatGPT gpt-5.4-nano: sources=%s chars=%s",
+            len(active_sources),
+            len(prompt),
+        )
         try:
             answer = await ask_llm(
                 prompt,
                 provider=selected_provider,
+                model=selected_model,
                 max_tokens=1500,
                 temperature=0.1,
                 response_format=_recommendation_response_format(),
+                task="source_recommendation",
             )
-            recommendations = _parse_recommendation_response(answer, valid_source_ids)
-            if len(recommendations) >= MIN_VALID_GIGACHAT_RECOMMENDATIONS:
+            recommendations, invalid_count = _parse_recommendation_response(answer, valid_source_ids)
+            log_llm_event(
+                task="source_recommendation",
+                event="parsed",
+                provider=selected_provider,
+                model=selected_model,
+                raw_answer=answer,
+                parsed_summary={
+                    "recommendations_count": len(recommendations),
+                    "valid_source_id_count": len(recommendations),
+                    "invalid_source_id_count": invalid_count,
+                    "available_source_count": len(valid_source_ids),
+                },
+            )
+            if len(recommendations) >= MIN_VALID_LLM_RECOMMENDATIONS:
                 if len(recommendations) < 5:
                     existing = {item.source_id for item in recommendations}
                     for item in fallback_recommend_sources(interests_text, active_sources):
@@ -246,21 +284,45 @@ async def recommend_sources(interests_text: str, sources: list[NewsSource], prov
                         existing.add(item.source_id)
                         if len(recommendations) >= 5:
                             break
-                logger.info("%s recommended %s sources", provider_title, len(recommendations))
+                logger.info("ChatGPT gpt-5.4-nano recommended %s sources", len(recommendations))
                 return recommendations
             logger.warning(
-                "%s recommendation response has too few valid source_id values: %s",
-                provider_title,
+                "ChatGPT gpt-5.4-nano recommendation response has too few valid source_id values: %s",
                 len(recommendations),
             )
+            log_llm_event(
+                task="source_recommendation",
+                event="fallback",
+                provider=selected_provider,
+                model=selected_model,
+                raw_answer=answer,
+                parsed_summary={"valid_source_id_count": len(recommendations), "invalid_source_id_count": invalid_count},
+                fallback_reason="too_few_valid_source_ids",
+            )
         except Exception as exc:
-            logger.exception("%s recommendation request failed, using fallback: %s", provider_title, exc)
+            log_llm_event(
+                task="source_recommendation",
+                event="fallback",
+                provider=selected_provider,
+                model=selected_model,
+                error=exc,
+                fallback_reason="llm_request_failed",
+            )
+            logger.exception("ChatGPT gpt-5.4-nano recommendation request failed, using fallback: %s", exc)
     elif active_sources:
-        logger.info("AI recommendation provider %s is not configured, using fallback", provider_title)
+        log_llm_event(
+            task="source_recommendation",
+            event="fallback",
+            provider=selected_provider,
+            model=selected_model,
+            fallback_reason="OPENAI_API_KEY is empty",
+            parsed_summary={"available_source_count": len(active_sources)},
+        )
+        logger.info("ChatGPT gpt-5.4-nano recommendation is not configured, using fallback")
     return fallback_recommend_sources(interests_text, active_sources)
 
 
-def extract_json_object(raw_text: str) -> dict | None:
+def extract_json_object(raw_text: str, *, task: str = "other") -> dict | None:
     text = raw_text.strip()
     text = re.sub(r"^```(?:json|JSON)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
@@ -269,15 +331,23 @@ def extract_json_object(raw_text: str) -> dict | None:
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end < start:
-        logger.warning("Cannot find JSON object in GigaChat response. raw_preview=%r", raw_text[:4000])
+        log_llm_event(task=task, event="parse_error", raw_answer=raw_text, error="Cannot find JSON object")
+        logger.warning("Cannot find JSON object in LLM response. raw_preview=%r", raw_text[:4000])
         return None
 
     candidate = text[start : end + 1]
     try:
         payload = json.loads(candidate)
     except json.JSONDecodeError as exc:
+        log_llm_event(
+            task=task,
+            event="parse_error",
+            raw_answer=raw_text,
+            error=exc,
+            extra={"candidate_preview": candidate[:4000]},
+        )
         logger.warning(
-            "Cannot parse GigaChat recommendation JSON. raw_preview=%r candidate=%r error=%s",
+            "Cannot parse LLM JSON. raw_preview=%r candidate=%r error=%s",
             raw_text[:4000],
             candidate[:4000],
             exc,
@@ -285,8 +355,15 @@ def extract_json_object(raw_text: str) -> dict | None:
         return None
 
     if not isinstance(payload, dict):
+        log_llm_event(
+            task=task,
+            event="parse_error",
+            raw_answer=raw_text,
+            error="LLM JSON is not an object",
+            extra={"candidate_preview": candidate[:4000]},
+        )
         logger.warning(
-            "GigaChat recommendation JSON is not an object. raw_preview=%r candidate=%r",
+            "LLM JSON is not an object. raw_preview=%r candidate=%r",
             raw_text[:4000],
             candidate[:4000],
         )
@@ -295,20 +372,31 @@ def extract_json_object(raw_text: str) -> dict | None:
     return payload
 
 
-def _parse_recommendation_response(answer: str, valid_source_ids: set[str]) -> list[SourceRecommendation]:
-    payload = extract_json_object(answer)
+def _parse_recommendation_response(answer: str, valid_source_ids: set[str]) -> tuple[list[SourceRecommendation], int]:
+    payload = extract_json_object(answer, task="source_recommendation")
     if payload is None:
-        return []
+        return [], 0
 
     raw_items = payload.get("recommendations", []) if isinstance(payload, dict) else []
     recommendations: list[SourceRecommendation] = []
     seen: set[str] = set()
+    invalid_count = 0
     for item in raw_items:
         if not isinstance(item, dict):
+            invalid_count += 1
             continue
         source_id = str(item.get("source_id", "")).strip()
         if source_id not in valid_source_ids or source_id in seen:
-            logger.warning("Ignoring invalid GigaChat source_id recommendation: %s", source_id)
+            invalid_count += 1
+            log_llm_event(
+                task="source_recommendation",
+                event="invalid_source_id",
+                provider="chatgpt",
+                model="gpt-5.4-nano",
+                raw_answer=answer,
+                parsed_summary={"invalid_source_id": source_id},
+            )
+            logger.warning("Ignoring invalid LLM source_id recommendation: %s", source_id)
             continue
         reason = str(item.get("reason", "")).strip() or "Подходит по интересам пользователя."
         recommendations.append(SourceRecommendation(source_id=source_id, reason=reason))
@@ -316,7 +404,7 @@ def _parse_recommendation_response(answer: str, valid_source_ids: set[str]) -> l
         if len(recommendations) >= 10:
             break
 
-    return recommendations[:10]
+    return recommendations[:10], invalid_count
 
 
 def fallback_recommend_sources(interests_text: str, sources: list[NewsSource]) -> list[SourceRecommendation]:

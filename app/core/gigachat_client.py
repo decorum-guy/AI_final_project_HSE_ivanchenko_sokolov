@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
+from app.core.llm_debug import log_llm_event
 from app.core.rss import NewsItem
 
 
@@ -50,9 +51,21 @@ async def ask_gigachat(
     temperature: float = 0.2,
     model: str | None = None,
     response_format: dict[str, Any] | None = None,
+    task: str = "other",
 ) -> str:
     settings = get_settings()
     if not settings.gigachat_credentials:
+        log_llm_event(
+            task=task,
+            event="api_error",
+            provider="gigachat",
+            model=model or "default",
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            error="GIGACHAT_CREDENTIALS is empty",
+        )
         raise RuntimeError("GIGACHAT_CREDENTIALS is empty")
 
     from gigachat import GigaChat
@@ -68,17 +81,64 @@ async def ask_gigachat(
         payload_kwargs["response_format"] = response_format
 
     payload = Chat(**payload_kwargs)
+    selected_model = model or "default"
+    log_llm_event(
+        task=task,
+        event="request",
+        provider="gigachat",
+        model=selected_model,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        response_format=response_format,
+    )
 
-    async with GigaChat(
-        credentials=settings.gigachat_credentials,
-        verify_ssl_certs=False,
-        timeout=60,
-    ) as client:
-        response = await client.achat(payload)
+    try:
+        async with GigaChat(
+            credentials=settings.gigachat_credentials,
+            verify_ssl_certs=False,
+            timeout=60,
+        ) as client:
+            response = await client.achat(payload)
+    except Exception as exc:
+        log_llm_event(
+            task=task,
+            event="api_error",
+            provider="gigachat",
+            model=selected_model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            error=exc,
+        )
+        raise
 
     answer = _extract_answer(response)
     if not answer:
+        log_llm_event(
+            task=task,
+            event="empty_response",
+            provider="gigachat",
+            model=selected_model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            error="GigaChat returned an empty response",
+        )
         raise RuntimeError("GigaChat returned an empty response")
+    log_llm_event(
+        task=task,
+        event="response",
+        provider="gigachat",
+        model=selected_model,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        response_format=response_format,
+        raw_answer=answer,
+    )
     return answer
 
 
@@ -89,9 +149,21 @@ async def ask_chatgpt(
     temperature: float = 0.2,
     model: str | None = None,
     response_format: dict[str, Any] | None = None,
+    task: str = "other",
 ) -> str:
     settings = get_settings()
     if not settings.openai_api_key:
+        log_llm_event(
+            task=task,
+            event="api_error",
+            provider="chatgpt",
+            model=model or settings.openai_model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            error="OPENAI_API_KEY is empty",
+        )
         raise RuntimeError("OPENAI_API_KEY is empty")
 
     selected_model = model or _select_openai_model()
@@ -105,6 +177,17 @@ async def ask_chatgpt(
     openai_response_format = _openai_response_format(response_format)
     if openai_response_format:
         request_payload["response_format"] = openai_response_format
+    log_llm_event(
+        task=task,
+        event="request",
+        provider="chatgpt",
+        model=selected_model,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        response_format=response_format,
+        extra={"token_limit_parameter": token_limit_parameter},
+    )
 
     async with httpx.AsyncClient(timeout=60) as client:
         try:
@@ -127,6 +210,22 @@ async def ask_chatgpt(
                 token_limit_parameter,
                 response.text[:2000],
             )
+            log_llm_event(
+                task=task,
+                event="api_error",
+                provider="chatgpt",
+                model=selected_model,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                response_format=response_format,
+                error=exc,
+                raw_answer=response.text,
+                extra={
+                    "status_code": response.status_code,
+                    "token_limit_parameter": token_limit_parameter,
+                },
+            )
             raise
         except httpx.HTTPError as exc:
             logger.error(
@@ -136,16 +235,64 @@ async def ask_chatgpt(
                 token_limit_parameter,
                 exc,
             )
+            log_llm_event(
+                task=task,
+                event="api_error",
+                provider="chatgpt",
+                model=selected_model,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                response_format=response_format,
+                error=exc,
+                extra={"token_limit_parameter": token_limit_parameter},
+            )
             raise
         payload = response.json()
     _record_openai_usage(payload, selected_model)
 
     choices = payload.get("choices") or []
     if not choices:
+        log_llm_event(
+            task=task,
+            event="empty_response",
+            provider="chatgpt",
+            model=selected_model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            error="ChatGPT returned an empty response",
+            extra={"token_limit_parameter": token_limit_parameter},
+        )
         raise RuntimeError("ChatGPT returned an empty response")
     answer = (choices[0].get("message") or {}).get("content", "")
     if not answer:
+        log_llm_event(
+            task=task,
+            event="empty_content",
+            provider="chatgpt",
+            model=selected_model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            error="ChatGPT returned an empty content",
+            extra={"token_limit_parameter": token_limit_parameter},
+        )
         raise RuntimeError("ChatGPT returned an empty content")
+    log_llm_event(
+        task=task,
+        event="response",
+        provider="chatgpt",
+        model=selected_model,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        response_format=response_format,
+        raw_answer=str(answer),
+        extra={"token_limit_parameter": token_limit_parameter},
+    )
     return str(answer).strip()
 
 
@@ -242,6 +389,7 @@ async def ask_llm(
     temperature: float = 0.2,
     model: str | None = None,
     response_format: dict[str, Any] | None = None,
+    task: str = "other",
 ) -> str:
     selected = (provider or get_settings().ai_provider or "gigachat").lower()
     if selected == "chatgpt":
@@ -251,6 +399,7 @@ async def ask_llm(
             temperature=temperature,
             model=model,
             response_format=response_format,
+            task=task,
         )
     return await ask_gigachat(
         prompt,
@@ -258,6 +407,7 @@ async def ask_llm(
         temperature=temperature,
         model=model,
         response_format=response_format,
+        task=task,
     )
 
 
@@ -419,7 +569,7 @@ class GigaChatDigestClient:
         prompt = self._build_digest_prompt(items, period_title)
         logger.info("Sending digest prompt to AI provider: provider=%s items=%s chars=%s", self.provider, len(items), len(prompt))
         try:
-            answer = await ask_llm(prompt, provider=self.provider, max_tokens=2600, temperature=0.15)
+            answer = await ask_llm(prompt, provider=self.provider, max_tokens=2600, temperature=0.15, task="digest")
             text = postprocess_digest_html(answer)
             return repair_digest_text(text)
         except Exception as exc:
@@ -499,7 +649,7 @@ class GigaChatDigestClient:
             f"Дайджест:\n{digest_text[:3500]}"
         )
         try:
-            slogan = await ask_llm(prompt, provider=self.provider, max_tokens=120, temperature=0.4)
+            slogan = await ask_llm(prompt, provider=self.provider, max_tokens=120, temperature=0.4, task="other")
             slogan = re.sub(r"<[^>]+>", "", slogan).strip().strip('"').strip("'")
             slogan = re.sub(r"\s+", " ", slogan)
             if not slogan or len(slogan) > 120:
@@ -521,7 +671,7 @@ class GigaChatDigestClient:
             "Каждая новость должна иметь <b>Кратко:</b>, <b>Почему важно:</b>, Источник:.\n\n"
             f"Дайджест:\n{digest_text}"
         )
-        answer = await ask_llm(prompt, provider=self.provider, max_tokens=2200, temperature=0.1)
+        answer = await ask_llm(prompt, provider=self.provider, max_tokens=2200, temperature=0.1, task="shorten")
         return postprocess_digest_html(answer)
 
     async def history_title(self, digest_text: str) -> str:
@@ -531,7 +681,7 @@ class GigaChatDigestClient:
             f"Дайджест:\n{digest_text[:2500]}"
         )
         try:
-            title = await ask_llm(prompt, provider=self.provider, max_tokens=80, temperature=0.3)
+            title = await ask_llm(prompt, provider=self.provider, max_tokens=80, temperature=0.3, task="history_title")
             title = re.sub(r"<[^>]+>", "", title).strip().strip('"').strip("'")
             title = re.sub(r"\s+", " ", title)
             if not title or len(title) > 80:
