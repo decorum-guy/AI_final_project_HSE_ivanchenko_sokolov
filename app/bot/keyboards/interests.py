@@ -10,7 +10,16 @@ def interests_menu() -> InlineKeyboardMarkup:
     button(kb, text="🧩 Изменить слова", callback_data="interests:keywords", style="primary")
     button(kb, text="🤖 Подобрать источники", callback_data="interests:recommend", style="success")
     button(kb, text="📡 Выбрать вручную", callback_data="sources:choose:subs", style="primary")
+    button(kb, text="🧹 Очистить интересы", callback_data="interests:clear_confirm", style="danger")
     button(kb, text="← Назад", callback_data="menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def interests_clear_confirm() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    button(kb, text="✅ Да, очистить", callback_data="interests:clear", style="danger")
+    button(kb, text="← Назад", callback_data="interests:show")
     kb.adjust(1)
     return kb.as_markup()
 

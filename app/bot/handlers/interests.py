@@ -6,6 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.keyboards.interests import (
+    interests_clear_confirm,
     interests_after_save,
     interests_edit_choice,
     interests_edit_back,
@@ -70,6 +71,34 @@ async def interests_screen(callback: CallbackQuery, state: FSMContext) -> None:
     async with async_session() as session:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
     await safe_edit_message(callback.message, _interests_text(user.interests_text, user.interests_keywords), reply_markup=interests_menu(), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "interests:clear_confirm")
+async def clear_interests_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    await safe_callback_answer(callback)
+    await state.clear()
+    await safe_edit_message(
+        callback.message,
+        "Вы уверены, что хотите очистить интересы?\n\n"
+        "Это удалит и свободный текст интересов, и нормализованные слова.",
+        reply_markup=interests_clear_confirm(),
+    )
+
+
+@router.callback_query(F.data == "interests:clear")
+async def clear_interests(callback: CallbackQuery, state: FSMContext) -> None:
+    await safe_callback_answer(callback, "Интересы очищены")
+    await state.clear()
+    async with async_session() as session:
+        user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        await queries.clear_interests(session, user)
+        await session.refresh(user)
+    await safe_edit_message(
+        callback.message,
+        _interests_text(user.interests_text, user.interests_keywords),
+        reply_markup=interests_menu(),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data == "interests:edit")

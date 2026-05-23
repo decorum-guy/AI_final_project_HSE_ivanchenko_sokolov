@@ -377,6 +377,12 @@ async def save_interests_keywords(session: AsyncSession, user: User, keywords: l
     await session.commit()
 
 
+async def clear_interests(session: AsyncSession, user: User) -> None:
+    user.interests_text = None
+    user.interests_keywords = None
+    await session.commit()
+
+
 async def save_timezone(session: AsyncSession, user: User, timezone: str) -> None:
     user.timezone = timezone
     await session.commit()
