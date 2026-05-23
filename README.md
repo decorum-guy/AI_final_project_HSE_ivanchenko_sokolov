@@ -247,31 +247,42 @@ app/data/sources.xlsx
 
 ## Проверка RSS-источников
 
-Для диагностики RSS-лент в проекте есть скрипт:
+Для точечной диагностики одного RSS-источника используется скрипт:
 
 ```bash
-python scripts/validate_sources.py --path app/data/sources.xlsx
+python scripts/debug_rss_fetch.py rbc_news
 ```
 
-Скрипт читает `sources.xlsx` через `pandas/openpyxl`, не изменяет исходный Excel-файл и сохраняет отчеты в папку `reports/`.
+Скрипт использует тот же RSS-fetcher и те же HTTP headers, что и бот:
 
-Проверка использует тот же RSS-fetcher, что и бот:
+- `User-Agent`;
+- `Accept`;
+- `Accept-Language`;
+- `Cache-Control`.
 
-- загрузка RSS через `aiohttp`;
-- единые HTTP headers;
-- полный `response.read()` перед анализом;
-- `feedparser.parse()` по `bytes`;
-- одинаковая логика статусов `OK`, `WARNING`, `ERROR`.
-
-Если источник имеет `bozo=True`, но содержит `entries`, он считается рабочим с предупреждением. Если новостей нет или возникла HTTP/fetch-ошибка, источник пропускается и не ломает дайджест.
+Это нужно, чтобы проверка совпадала с реальным поведением бота, а не с ручным `curl`.
 
 Примеры:
 
 ```bash
-python scripts/validate_sources.py --path app/data/sources.xlsx
-python scripts/validate_sources.py --path app/data/sources.xlsx --timeout 15 --concurrency 6
-python scripts/validate_sources.py --path app/data/sources.xlsx --include-inactive
+python scripts/debug_rss_fetch.py rbc_news
+python scripts/debug_rss_fetch.py portal_kultura
+python scripts/debug_rss_fetch.py pedsovet
 ```
+
+Можно проверить прямой URL:
+
+```bash
+python scripts/debug_rss_fetch.py "https://rssexport.rbc.ru/rbcnews/news/30/full.rss" --source-id rbc_manual
+```
+
+Старый скрипт массовой проверки:
+
+```bash
+python scripts/validate_sources.py --path app/data/sources.xlsx
+```
+
+считается legacy/deprecated и оставлен только для общей проверки всех источников и генерации CSV/XLSX-отчетов.
 
 ---
 
@@ -929,6 +940,7 @@ ADMIN_ID=123456789
 15. Расписание сохраняется.
 16. Админ-панель открывается только для `ADMIN_ID`.
 17. Watchdog перезапускает бота при падении процесса.
+18. Debug-проверка RSS через `scripts/debug_rss_fetch.py` использует те же headers, что и бот.
 
 Для быстрой технической проверки:
 
