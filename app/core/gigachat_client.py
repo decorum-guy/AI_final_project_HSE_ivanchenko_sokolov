@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 ALLOWED_TAG_RE = re.compile(r"</?(?:b|i|blockquote)>|<a\s+href=\"[^\"]+\">|</a>", re.IGNORECASE)
 MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)]\((https?://[^)\s]+)\)")
+IMPORTANT_NUMBER_RE = re.compile(r"(?<![\w/.-])\d+(?:[.,]\d+)?(?:\s?[%₽$€]|(?:\s?(?:м|км|метр(?:а|ов)?|тыс\.?|млн|млрд))\b)?", re.IGNORECASE)
 SLOGAN_PLACEHOLDERS = (
     "Короткий слоган дайджеста одной строкой.",
     "Короткий слоган дайджеста в одну строку.",
@@ -553,6 +554,29 @@ def _log_digest_quality(text: str) -> None:
             logger.warning("Digest structure warning: news #%s missing labels: %s", index, ", ".join(missing))
 
 
+def _extract_important_numbers(text: str) -> set[str]:
+    numbers: set[str] = set()
+    for match in IMPORTANT_NUMBER_RE.finditer(text or ""):
+        value = re.sub(r"\s+", "", match.group(0)).replace(",", ".")
+        if value:
+            numbers.add(value)
+    return numbers
+
+
+def _log_missing_numeric_facts(items: list[NewsItem], digest_text: str) -> None:
+    digest_numbers = _extract_important_numbers(digest_text)
+    for index, item in enumerate(items, start=1):
+        source_text = f"{item.title} {item.summary}"
+        item_numbers = _extract_important_numbers(source_text)
+        if item_numbers and not (item_numbers & digest_numbers):
+            logger.warning(
+                "Digest quality warning: input item #%s from %s contains numbers %s, but none of them were found in final digest",
+                index,
+                item.source,
+                ", ".join(sorted(item_numbers)),
+            )
+
+
 class GigaChatDigestClient:
     def __init__(self, provider: str | None = None) -> None:
         self.settings = get_settings()
@@ -571,7 +595,9 @@ class GigaChatDigestClient:
         try:
             answer = await ask_llm(prompt, provider=self.provider, max_tokens=2600, temperature=0.15, task="digest")
             text = postprocess_digest_html(answer)
-            return repair_digest_text(text)
+            text = repair_digest_text(text)
+            _log_missing_numeric_facts(items, text)
+            return text
         except Exception as exc:
             logger.exception("AI digest request failed, using fallback: %s", exc)
             return repair_digest_text(self._fallback_digest(items, period_title))
@@ -603,6 +629,13 @@ class GigaChatDigestClient:
             "14. Вводный блок и итог должны быть короткими, без длинных рассуждений.",
             "15. Символы <, >, & в обычном тексте не используй вне разрешенных HTML-тегов.",
             "16. Не копируй поясняющие строки шаблона. Вместо описаний из шаблона всегда пиши реальный текст.",
+            "17. Не добавляй факты, которых нет во входных новостях.",
+            "18. Не смешивай факты из разных входных новостей. Каждая новость в дайджесте должна опираться только на свой title, summary, source, category, date и link.",
+            "19. Не меняй национальность, страну, профессию, должность, имя, название фильма, компании или проекта, если этого нет во входных данных конкретной новости.",
+            "20. Сохраняй важные конкретные данные из входной новости: числа, даты, суммы, проценты, высоты, расстояния, рекорды, имена, названия организаций и проектов.",
+            "21. Если новость про рекорд и во входном title/summary есть показатель рекорда, обязательно укажи этот показатель в строке <b>Кратко:</b>.",
+            "22. Если точного числа или факта нет во входных данных, не выдумывай его и не делай вид, что он известен.",
+            "23. Если summary слишком короткий, пересказывай только то, что точно есть в title и summary.",
             "",
             "Строгий шаблон ответа:",
             f"<b>📰 Дайджест {period_title}</b>",
@@ -613,17 +646,19 @@ class GigaChatDigestClient:
             "<b>Подробно</b>",
             "",
             "<b>1. Заголовок</b>",
-            "<b>Кратко:</b> 1 короткое предложение.",
-            "<b>Почему важно:</b> 1 короткое предложение.",
+            "<b>Кратко:</b> 1 короткое предложение с главным фактом и важными числами, если они есть во входной новости.",
+            "<b>Почему важно:</b> 1 короткое предложение без новых фактов, которых нет во входной новости.",
             "Источник: <a href=\"URL\">Название источника</a>",
             "",
             "<b>2. Следующая новость</b>",
-            "<b>Кратко:</b> 1 короткое предложение.",
-            "<b>Почему важно:</b> 1 короткое предложение.",
+            "<b>Кратко:</b> 1 короткое предложение с главным фактом и важными числами, если они есть во входной новости.",
+            "<b>Почему важно:</b> 1 короткое предложение без новых фактов, которых нет во входной новости.",
             "Источник: <a href=\"URL\">Название источника</a>",
             "",
             "<b>Итог</b>",
             "<blockquote>Короткий общий вывод по дайджесту.</blockquote>",
+            "",
+            "Каждый numbered item ниже — отдельная новость. Не переноси детали из одной numbered news item в другую.",
             "",
             "Входные новости:",
         ]
