@@ -2,6 +2,8 @@
 bot.db
 *.db
 logs/
+logs/llm-debug.log
+logs/llm_full/
 reports/
 yes
 yes.pub

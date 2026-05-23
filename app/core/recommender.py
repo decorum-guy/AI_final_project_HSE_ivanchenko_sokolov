@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from app.config import get_settings
 from app.core.gigachat_client import ask_llm
-from app.core.llm_debug import log_llm_event
+from app.core.llm_debug import log_llm_event, new_request_id
 from app.core.rss import NewsItem
 from app.db.models import NewsSource
 
@@ -141,6 +141,7 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
         "[\"технологии\", \"культура\"].\n"
         "10. Ответ строго JSON по схеме."
     )
+    request_id = new_request_id()
     try:
         logger.info("Normalizing interests with ChatGPT model gpt-5.4-nano")
         answer = await ask_llm(
@@ -151,14 +152,16 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
             temperature=0.1,
             response_format=_normalization_response_format(),
             task="interest_normalization",
+            request_id=request_id,
         )
-        payload = extract_json_object(answer, task="interest_normalization")
+        payload = extract_json_object(answer, task="interest_normalization", request_id=request_id)
         if isinstance(payload, dict):
             raw_keywords = payload.get("keywords") or []
             keywords = parse_keywords(", ".join(str(item) for item in raw_keywords))
             log_llm_event(
                 task="interest_normalization",
                 event="parsed",
+                request_id=request_id,
                 provider="chatgpt",
                 model="gpt-5.4-nano",
                 raw_answer=answer,
@@ -169,6 +172,7 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
         log_llm_event(
             task="interest_normalization",
             event="fallback",
+            request_id=request_id,
             provider="chatgpt",
             model="gpt-5.4-nano",
             raw_answer=answer,
@@ -179,6 +183,7 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
         log_llm_event(
             task="interest_normalization",
             event="fallback",
+            request_id=request_id,
             provider="chatgpt",
             model="gpt-5.4-nano",
             error=exc,
@@ -246,6 +251,7 @@ async def recommend_sources(interests_text: str, sources: list[NewsSource], prov
     selected_model = "gpt-5.4-nano"
     if settings.openai_api_key and active_sources:
         prompt = _build_recommendation_prompt(interests_text, active_sources)
+        request_id = new_request_id()
         logger.info(
             "Sending source recommendation prompt to ChatGPT gpt-5.4-nano: sources=%s chars=%s",
             len(active_sources),
@@ -260,11 +266,13 @@ async def recommend_sources(interests_text: str, sources: list[NewsSource], prov
                 temperature=0.1,
                 response_format=_recommendation_response_format(),
                 task="source_recommendation",
+                request_id=request_id,
             )
-            recommendations, invalid_count = _parse_recommendation_response(answer, valid_source_ids)
+            recommendations, invalid_count = _parse_recommendation_response(answer, valid_source_ids, request_id=request_id)
             log_llm_event(
                 task="source_recommendation",
                 event="parsed",
+                request_id=request_id,
                 provider=selected_provider,
                 model=selected_model,
                 raw_answer=answer,
@@ -294,6 +302,7 @@ async def recommend_sources(interests_text: str, sources: list[NewsSource], prov
             log_llm_event(
                 task="source_recommendation",
                 event="fallback",
+                request_id=request_id,
                 provider=selected_provider,
                 model=selected_model,
                 raw_answer=answer,
@@ -304,6 +313,7 @@ async def recommend_sources(interests_text: str, sources: list[NewsSource], prov
             log_llm_event(
                 task="source_recommendation",
                 event="fallback",
+                request_id=request_id,
                 provider=selected_provider,
                 model=selected_model,
                 error=exc,
@@ -323,7 +333,7 @@ async def recommend_sources(interests_text: str, sources: list[NewsSource], prov
     return fallback_recommend_sources(interests_text, active_sources)
 
 
-def extract_json_object(raw_text: str, *, task: str = "other") -> dict | None:
+def extract_json_object(raw_text: str, *, task: str = "other", request_id: str | None = None) -> dict | None:
     text = raw_text.strip()
     text = re.sub(r"^```(?:json|JSON)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
@@ -332,7 +342,7 @@ def extract_json_object(raw_text: str, *, task: str = "other") -> dict | None:
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end < start:
-        log_llm_event(task=task, event="parse_error", raw_answer=raw_text, error="Cannot find JSON object")
+        log_llm_event(task=task, event="parse_error", request_id=request_id, raw_answer=raw_text, error="Cannot find JSON object")
         logger.warning("Cannot find JSON object in LLM response. raw_preview=%r", raw_text[:4000])
         return None
 
@@ -343,6 +353,7 @@ def extract_json_object(raw_text: str, *, task: str = "other") -> dict | None:
         log_llm_event(
             task=task,
             event="parse_error",
+            request_id=request_id,
             raw_answer=raw_text,
             error=exc,
             extra={"candidate_preview": candidate[:4000]},
@@ -359,6 +370,7 @@ def extract_json_object(raw_text: str, *, task: str = "other") -> dict | None:
         log_llm_event(
             task=task,
             event="parse_error",
+            request_id=request_id,
             raw_answer=raw_text,
             error="LLM JSON is not an object",
             extra={"candidate_preview": candidate[:4000]},
@@ -373,8 +385,8 @@ def extract_json_object(raw_text: str, *, task: str = "other") -> dict | None:
     return payload
 
 
-def _parse_recommendation_response(answer: str, valid_source_ids: set[str]) -> tuple[list[SourceRecommendation], int]:
-    payload = extract_json_object(answer, task="source_recommendation")
+def _parse_recommendation_response(answer: str, valid_source_ids: set[str], *, request_id: str | None = None) -> tuple[list[SourceRecommendation], int]:
+    payload = extract_json_object(answer, task="source_recommendation", request_id=request_id)
     if payload is None:
         return [], 0
 
@@ -392,6 +404,7 @@ def _parse_recommendation_response(answer: str, valid_source_ids: set[str]) -> t
             log_llm_event(
                 task="source_recommendation",
                 event="invalid_source_id",
+                request_id=request_id,
                 provider="chatgpt",
                 model="gpt-5.4-nano",
                 raw_answer=answer,

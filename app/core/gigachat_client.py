@@ -3,15 +3,16 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import datetime
-from html import escape
+from html import escape, unescape
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from app.config import get_settings
-from app.core.llm_debug import log_llm_event
+from app.core.llm_debug import log_llm_event, new_request_id, write_json_artifact
 from app.core.rss import NewsItem
 
 
@@ -21,6 +22,8 @@ ALLOWED_TAG_RE = re.compile(r"</?(?:b|i|blockquote)>|<a\s+href=\"[^\"]+\">|</a>"
 MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)]\((https?://[^)\s]+)\)")
 IMPORTANT_NUMBER_RE = re.compile(r"(?<![\w/.-])\d+(?:[.,]\d+)?(?:\s?[%₽$€]|(?:\s?(?:м|км|метр(?:а|ов)?|тыс\.?|млн|млрд))\b)?", re.IGNORECASE)
+HTML_ENTITY_NUMBER_RE = re.compile(r"&(?:amp;)?#(\d+);")
+IGNORED_ENTITY_NUMBERS = {"8230", "160", "171", "187", "8212", "8211", "8220", "8221", "33"}
 SLOGAN_PLACEHOLDERS = (
     "Короткий слоган дайджеста одной строкой.",
     "Короткий слоган дайджеста в одну строку.",
@@ -53,12 +56,17 @@ async def ask_gigachat(
     model: str | None = None,
     response_format: dict[str, Any] | None = None,
     task: str = "other",
+    request_id: str | None = None,
+    input_items_path: str | None = None,
+    input_items_count: int | None = None,
 ) -> str:
+    request_id = request_id or new_request_id()
     settings = get_settings()
     if not settings.gigachat_credentials:
         log_llm_event(
             task=task,
             event="api_error",
+            request_id=request_id,
             provider="gigachat",
             model=model or "default",
             prompt=prompt,
@@ -86,14 +94,18 @@ async def ask_gigachat(
     log_llm_event(
         task=task,
         event="request",
+        request_id=request_id,
         provider="gigachat",
         model=selected_model,
         prompt=prompt,
         max_tokens=max_tokens,
         temperature=temperature,
         response_format=response_format,
+        input_items_path=input_items_path,
+        input_items_count=input_items_count,
     )
 
+    started = time.perf_counter()
     try:
         async with GigaChat(
             credentials=settings.gigachat_credentials,
@@ -105,6 +117,7 @@ async def ask_gigachat(
         log_llm_event(
             task=task,
             event="api_error",
+            request_id=request_id,
             provider="gigachat",
             model=selected_model,
             prompt=prompt,
@@ -112,6 +125,9 @@ async def ask_gigachat(
             temperature=temperature,
             response_format=response_format,
             error=exc,
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            input_items_path=input_items_path,
+            input_items_count=input_items_count,
         )
         raise
 
@@ -120,6 +136,7 @@ async def ask_gigachat(
         log_llm_event(
             task=task,
             event="empty_response",
+            request_id=request_id,
             provider="gigachat",
             model=selected_model,
             prompt=prompt,
@@ -127,11 +144,15 @@ async def ask_gigachat(
             temperature=temperature,
             response_format=response_format,
             error="GigaChat returned an empty response",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            input_items_path=input_items_path,
+            input_items_count=input_items_count,
         )
         raise RuntimeError("GigaChat returned an empty response")
     log_llm_event(
         task=task,
         event="response",
+        request_id=request_id,
         provider="gigachat",
         model=selected_model,
         prompt=prompt,
@@ -139,6 +160,9 @@ async def ask_gigachat(
         temperature=temperature,
         response_format=response_format,
         raw_answer=answer,
+        duration_ms=round((time.perf_counter() - started) * 1000),
+        input_items_path=input_items_path,
+        input_items_count=input_items_count,
     )
     return answer
 
@@ -151,12 +175,17 @@ async def ask_chatgpt(
     model: str | None = None,
     response_format: dict[str, Any] | None = None,
     task: str = "other",
+    request_id: str | None = None,
+    input_items_path: str | None = None,
+    input_items_count: int | None = None,
 ) -> str:
+    request_id = request_id or new_request_id()
     settings = get_settings()
     if not settings.openai_api_key:
         log_llm_event(
             task=task,
             event="api_error",
+            request_id=request_id,
             provider="chatgpt",
             model=model or settings.openai_model,
             prompt=prompt,
@@ -181,15 +210,19 @@ async def ask_chatgpt(
     log_llm_event(
         task=task,
         event="request",
+        request_id=request_id,
         provider="chatgpt",
         model=selected_model,
         prompt=prompt,
         max_tokens=max_tokens,
         temperature=temperature,
         response_format=response_format,
+        input_items_path=input_items_path,
+        input_items_count=input_items_count,
         extra={"token_limit_parameter": token_limit_parameter},
     )
 
+    started = time.perf_counter()
     async with httpx.AsyncClient(timeout=60) as client:
         try:
             response = await client.post(
@@ -214,6 +247,7 @@ async def ask_chatgpt(
             log_llm_event(
                 task=task,
                 event="api_error",
+                request_id=request_id,
                 provider="chatgpt",
                 model=selected_model,
                 prompt=prompt,
@@ -222,6 +256,9 @@ async def ask_chatgpt(
                 response_format=response_format,
                 error=exc,
                 raw_answer=response.text,
+                duration_ms=round((time.perf_counter() - started) * 1000),
+                input_items_path=input_items_path,
+                input_items_count=input_items_count,
                 extra={
                     "status_code": response.status_code,
                     "token_limit_parameter": token_limit_parameter,
@@ -239,6 +276,7 @@ async def ask_chatgpt(
             log_llm_event(
                 task=task,
                 event="api_error",
+                request_id=request_id,
                 provider="chatgpt",
                 model=selected_model,
                 prompt=prompt,
@@ -246,6 +284,9 @@ async def ask_chatgpt(
                 temperature=temperature,
                 response_format=response_format,
                 error=exc,
+                duration_ms=round((time.perf_counter() - started) * 1000),
+                input_items_path=input_items_path,
+                input_items_count=input_items_count,
                 extra={"token_limit_parameter": token_limit_parameter},
             )
             raise
@@ -257,6 +298,7 @@ async def ask_chatgpt(
         log_llm_event(
             task=task,
             event="empty_response",
+            request_id=request_id,
             provider="chatgpt",
             model=selected_model,
             prompt=prompt,
@@ -264,6 +306,9 @@ async def ask_chatgpt(
             temperature=temperature,
             response_format=response_format,
             error="ChatGPT returned an empty response",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            input_items_path=input_items_path,
+            input_items_count=input_items_count,
             extra={"token_limit_parameter": token_limit_parameter},
         )
         raise RuntimeError("ChatGPT returned an empty response")
@@ -272,6 +317,7 @@ async def ask_chatgpt(
         log_llm_event(
             task=task,
             event="empty_content",
+            request_id=request_id,
             provider="chatgpt",
             model=selected_model,
             prompt=prompt,
@@ -279,12 +325,16 @@ async def ask_chatgpt(
             temperature=temperature,
             response_format=response_format,
             error="ChatGPT returned an empty content",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            input_items_path=input_items_path,
+            input_items_count=input_items_count,
             extra={"token_limit_parameter": token_limit_parameter},
         )
         raise RuntimeError("ChatGPT returned an empty content")
     log_llm_event(
         task=task,
         event="response",
+        request_id=request_id,
         provider="chatgpt",
         model=selected_model,
         prompt=prompt,
@@ -292,6 +342,9 @@ async def ask_chatgpt(
         temperature=temperature,
         response_format=response_format,
         raw_answer=str(answer),
+        duration_ms=round((time.perf_counter() - started) * 1000),
+        input_items_path=input_items_path,
+        input_items_count=input_items_count,
         extra={"token_limit_parameter": token_limit_parameter},
     )
     return str(answer).strip()
@@ -391,7 +444,11 @@ async def ask_llm(
     model: str | None = None,
     response_format: dict[str, Any] | None = None,
     task: str = "other",
+    request_id: str | None = None,
+    input_items_path: str | None = None,
+    input_items_count: int | None = None,
 ) -> str:
+    request_id = request_id or new_request_id()
     selected = (provider or get_settings().ai_provider or "gigachat").lower()
     if selected == "chatgpt":
         return await ask_chatgpt(
@@ -401,6 +458,9 @@ async def ask_llm(
             model=model,
             response_format=response_format,
             task=task,
+            request_id=request_id,
+            input_items_path=input_items_path,
+            input_items_count=input_items_count,
         )
     return await ask_gigachat(
         prompt,
@@ -409,6 +469,9 @@ async def ask_llm(
         model=model,
         response_format=response_format,
         task=task,
+        request_id=request_id,
+        input_items_path=input_items_path,
+        input_items_count=input_items_count,
     )
 
 
@@ -555,25 +618,80 @@ def _log_digest_quality(text: str) -> None:
 
 
 def _extract_important_numbers(text: str) -> set[str]:
+    text = HTML_ENTITY_NUMBER_RE.sub(" ", text or "")
+    text = unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
     numbers: set[str] = set()
-    for match in IMPORTANT_NUMBER_RE.finditer(text or ""):
+    for match in IMPORTANT_NUMBER_RE.finditer(text):
         value = re.sub(r"\s+", "", match.group(0)).replace(",", ".")
-        if value:
-            numbers.add(value)
+        numeric_part = re.match(r"\d+(?:\.\d+)?", value)
+        if numeric_part and numeric_part.group(0) not in IGNORED_ENTITY_NUMBERS:
+            numbers.add(numeric_part.group(0))
     return numbers
 
 
-def _log_missing_numeric_facts(items: list[NewsItem], digest_text: str) -> None:
+def _latest_llm_artifact(request_id: str, suffix: str) -> str | None:
+    matches = sorted(Path("logs/llm_full").glob(f"*_{request_id}_{suffix}"))
+    return str(matches[-1]) if matches else None
+
+
+def _digest_input_items_payload(items: list[NewsItem]) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for index, item in enumerate(items, start=1):
+        payload.append(
+            {
+                "index": index,
+                "title": item.title,
+                "source": item.source,
+                "category": item.category,
+                "published": item.published.isoformat() if isinstance(item.published, datetime) else None,
+                "summary": item.summary,
+                "link": item.link,
+                "numbers": sorted(_extract_important_numbers(f"{item.title} {item.summary}")),
+            }
+        )
+    return payload
+
+
+def _log_missing_numeric_facts(
+    items: list[NewsItem],
+    digest_text: str,
+    *,
+    request_id: str | None = None,
+    input_items_path: str | None = None,
+    response_path: str | None = None,
+) -> None:
     digest_numbers = _extract_important_numbers(digest_text)
     for index, item in enumerate(items, start=1):
         source_text = f"{item.title} {item.summary}"
         item_numbers = _extract_important_numbers(source_text)
-        if item_numbers and not (item_numbers & digest_numbers):
+        missing_numbers = sorted(item_numbers - digest_numbers)
+        if missing_numbers:
             logger.warning(
-                "Digest quality warning: input item #%s from %s contains numbers %s, but none of them were found in final digest",
+                "Digest quality warning: request_id=%s item #%s source=%s title=%r missing_numbers=%s link=%s input_items_path=%s response_path=%s",
+                request_id,
                 index,
                 item.source,
-                ", ".join(sorted(item_numbers)),
+                item.title,
+                missing_numbers,
+                item.link,
+                input_items_path,
+                response_path,
+            )
+            log_llm_event(
+                task="digest",
+                event="quality_warning",
+                request_id=request_id,
+                parsed_summary={
+                    "item_index": index,
+                    "title": item.title,
+                    "source": item.source,
+                    "missing_numbers": missing_numbers,
+                    "link": item.link,
+                },
+                input_items_path=input_items_path,
+                input_items_count=len(items),
+                extra={"response_path": response_path},
             )
 
 
@@ -591,12 +709,29 @@ class GigaChatDigestClient:
             return repair_digest_text(self._fallback_digest(items, period_title))
 
         prompt = self._build_digest_prompt(items, period_title)
+        request_id = new_request_id()
+        input_items_path = write_json_artifact("digest", request_id, "items", _digest_input_items_payload(items))
         logger.info("Sending digest prompt to AI provider: provider=%s items=%s chars=%s", self.provider, len(items), len(prompt))
         try:
-            answer = await ask_llm(prompt, provider=self.provider, max_tokens=2600, temperature=0.15, task="digest")
+            answer = await ask_llm(
+                prompt,
+                provider=self.provider,
+                max_tokens=2600,
+                temperature=0.15,
+                task="digest",
+                request_id=request_id,
+                input_items_path=input_items_path,
+                input_items_count=len(items),
+            )
             text = postprocess_digest_html(answer)
             text = repair_digest_text(text)
-            _log_missing_numeric_facts(items, text)
+            _log_missing_numeric_facts(
+                items,
+                text,
+                request_id=request_id,
+                input_items_path=input_items_path,
+                response_path=_latest_llm_artifact(request_id, "response.txt"),
+            )
             return text
         except Exception as exc:
             logger.exception("AI digest request failed, using fallback: %s", exc)
