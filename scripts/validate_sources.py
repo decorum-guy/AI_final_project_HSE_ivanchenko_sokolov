@@ -548,7 +548,7 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=10,
+        default=20,
         help="Timeout на один RSS-источник в секундах",
     )
 
