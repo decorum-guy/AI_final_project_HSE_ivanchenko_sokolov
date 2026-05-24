@@ -24,6 +24,7 @@ from app.bot.keyboards.admin import (
     user_title,
 )
 from app.bot.keyboards.digest import digest_actions, long_digest_options
+from app.bot.keyboards.main import main_menu
 from app.bot.utils import safe_callback_answer, safe_edit_message
 from app.config import get_settings
 from app.core.digest import build_digest
@@ -70,6 +71,38 @@ async def admin_command(message: Message) -> None:
     if not await _ensure_admin(message):
         return
     await message.answer("Админ-панель", reply_markup=admin_menu())
+
+
+@router.message(Command("check2026"))
+async def seminar_check_long_digest(message: Message) -> None:
+    loading = await message.answer(
+        "📦 Собираю проверочный длинный дайджест...\n\n"
+        "Если такой дайджест уже есть в кэше, токены повторно не тратятся."
+    )
+    async with async_session() as session:
+        user = await queries.get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.username,
+            message.from_user.first_name,
+            message.from_user.last_name,
+        )
+        selected = await queries.selected_sources(session, user.id)
+        if not selected:
+            await loading.edit_text(
+                "Для проверки длинного дайджеста сначала выберите источники в боте, затем снова введите /check2026.",
+                reply_markup=main_menu(),
+            )
+            return
+
+        digest = await build_digest(session, user, "selected_sources", "week")
+        attempts = digest.shorten_attempts_left if digest.shorten_attempts_left is not None else 2
+        token, _ = await ensure_digest_html(session, digest)
+
+    await loading.edit_text(
+        LONG_DIGEST_TEXT,
+        reply_markup=long_digest_options(digest.id, attempts, public_digest_url(token)),
+    )
 
 
 @router.callback_query(F.data == "admin:menu")
