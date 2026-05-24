@@ -244,13 +244,6 @@ def render_digest_page(digest: DigestHistory, token: str | None = None) -> str:
       line-height: 1.05;
       letter-spacing: -0.03em;
     }}
-    .hero p {{
-      margin: 18px 0 0;
-      font-size: 17px;
-      line-height: 1.6;
-      color: var(--muted);
-      max-width: 760px;
-    }}
     .grid {{
       display: grid;
       grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
@@ -355,7 +348,6 @@ def render_digest_page(digest: DigestHistory, token: str | None = None) -> str:
         <span class="chip">{escape(_period_label(digest.period))}</span>
       </div>
       <h1>{escape(title_text)}</h1>
-      <p>{summary_inner}</p>
     </section>
 
     <section class="grid">
