@@ -27,6 +27,7 @@ from app.bot.keyboards.digest import digest_actions, long_digest_options
 from app.bot.utils import safe_callback_answer, safe_edit_message
 from app.config import get_settings
 from app.core.digest import build_digest
+from app.core.digest_delivery import ensure_digest_html, public_digest_url
 from app.db import queries
 from app.db.database import async_session
 from app.db.models import NewsSource
@@ -37,7 +38,7 @@ router = Router()
 SAFE_TELEGRAM_LIMIT = 3800
 LONG_DIGEST_TEXT = (
     "Дайджест получился слишком объемным для одного сообщения Telegram.\n\n"
-    "Можно перегенерировать короткую версию или получить полный файл."
+    "Можно открыть полную HTML-страницу или получить дайджест частями."
 )
 
 
@@ -308,7 +309,8 @@ async def admin_test_period_selected(callback: CallbackQuery) -> None:
         keyboard = digest_actions(digest.id, digest.refresh_attempts_left, digest.is_favorite)
         if len(text) > SAFE_TELEGRAM_LIMIT:
             attempts = digest.shorten_attempts_left if digest.shorten_attempts_left is not None else 2
-            keyboard = long_digest_options(digest.id, attempts)
+            token, _ = await ensure_digest_html(session, digest)
+            keyboard = long_digest_options(digest.id, attempts, public_digest_url(token))
             text = LONG_DIGEST_TEXT
             parse_mode = None
         else:
@@ -372,9 +374,10 @@ async def admin_long_period_selected(callback: CallbackQuery) -> None:
         user = await queries.get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         digest = await build_digest(session, user, mode, period)
         attempts = digest.shorten_attempts_left if digest.shorten_attempts_left is not None else 2
+        token, _ = await ensure_digest_html(session, digest)
 
     await safe_edit_message(
         loading or callback.message,
         LONG_DIGEST_TEXT,
-        reply_markup=long_digest_options(digest.id, attempts),
+        reply_markup=long_digest_options(digest.id, attempts, public_digest_url(token)),
     )
