@@ -12,7 +12,14 @@ ENV_PATH = PROJECT_ROOT / ".env"
 load_dotenv(ENV_PATH, override=False, encoding="utf-8-sig")
 
 
-OPENAI_MODEL_CHOICES = ("gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano")
+OPENAI_MODEL_CHOICES = (
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "openai/gpt-5.4",
+    "openai/gpt-5.4-mini",
+    "openai/gpt-5.4-nano",
+)
 
 
 class Settings(BaseSettings):
@@ -23,6 +30,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.4"
     openai_fallback_model: str = "gpt-5.4-mini"
+    openai_nano_model: str = "gpt-5.4-nano"
     openai_daily_token_limit: int = 200_000
     openai_base_url: str = "https://api.openai.com/v1"
     ai_provider: str = "gigachat"
@@ -75,6 +83,12 @@ class Settings(BaseSettings):
     def normalize_openai_fallback_model(cls, value):
         value = (value or "gpt-5.4-mini").strip()
         return value if value in OPENAI_MODEL_CHOICES else "gpt-5.4-mini"
+
+    @field_validator("openai_nano_model", mode="before")
+    @classmethod
+    def normalize_openai_nano_model(cls, value):
+        value = (value or "gpt-5.4-nano").strip()
+        return value if value in OPENAI_MODEL_CHOICES else "gpt-5.4-nano"
 
     @field_validator("openai_daily_token_limit", mode="before")
     @classmethod

@@ -48,6 +48,10 @@ def _extract_answer(response: Any) -> str:
     return str(getattr(message, "content", "")).strip()
 
 
+def _is_gpt5_model(model: str) -> bool:
+    return model.split("/")[-1].startswith("gpt-5")
+
+
 async def ask_gigachat(
     prompt: str,
     *,
@@ -197,7 +201,7 @@ async def ask_chatgpt(
         raise RuntimeError("OPENAI_API_KEY is empty")
 
     selected_model = model or _select_openai_model()
-    token_limit_parameter = "max_completion_tokens" if selected_model.startswith("gpt-5") else "max_tokens"
+    token_limit_parameter = "max_completion_tokens" if _is_gpt5_model(selected_model) else "max_tokens"
     request_payload: dict[str, Any] = {
         "model": selected_model,
         "messages": [{"role": "user", "content": prompt}],

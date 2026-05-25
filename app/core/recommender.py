@@ -142,12 +142,13 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
         "10. Ответ строго JSON по схеме."
     )
     request_id = new_request_id()
+    settings = get_settings()
     try:
-        logger.info("Normalizing interests with ChatGPT model gpt-5.4-nano")
+        logger.info("Normalizing interests with ChatGPT model %s", settings.openai_nano_model)
         answer = await ask_llm(
             prompt,
             provider="chatgpt",
-            model="gpt-5.4-nano",
+            model=settings.openai_nano_model,
             max_tokens=500,
             temperature=0.1,
             response_format=_normalization_response_format(),
@@ -163,7 +164,7 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
                 event="parsed",
                 request_id=request_id,
                 provider="chatgpt",
-                model="gpt-5.4-nano",
+                model=settings.openai_nano_model,
                 raw_answer=answer,
                 parsed_summary={"keywords_count": len(keywords), "raw_keywords_count": len(raw_keywords)},
             )
@@ -174,7 +175,7 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
             event="fallback",
             request_id=request_id,
             provider="chatgpt",
-            model="gpt-5.4-nano",
+            model=settings.openai_nano_model,
             raw_answer=answer,
             fallback_reason="too_few_keywords_or_parse_error",
         )
@@ -185,7 +186,7 @@ async def normalize_interests(interests_text: str, provider: str | None = None) 
             event="fallback",
             request_id=request_id,
             provider="chatgpt",
-            model="gpt-5.4-nano",
+            model=settings.openai_nano_model,
             error=exc,
             fallback_reason="llm_request_failed",
         )
