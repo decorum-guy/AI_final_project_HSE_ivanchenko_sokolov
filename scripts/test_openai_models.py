@@ -26,6 +26,8 @@ def print_settings_info() -> None:
     print(f"OPENAI_API_KEY указан: {bool(settings.openai_api_key)}")
     print()
 
+def is_gpt5_model(model: str) -> bool:
+    return model.split("/")[-1].startswith("gpt-5")
 
 def build_payload(model: str, temperature: float) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -39,10 +41,10 @@ def build_payload(model: str, temperature: float) -> dict[str, Any]:
         "temperature": temperature,
     }
 
-    if model.startswith("gpt-5"):
-        payload["max_completion_tokens"] = 10
+    if is_gpt5_model(model):
+        payload["max_completion_tokens"] = 32
     else:
-        payload["max_tokens"] = 10
+        payload["max_tokens"] = 32
 
     return payload
 
