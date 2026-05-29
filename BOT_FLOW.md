@@ -84,6 +84,7 @@ MAX_LLM_ARTICLES = 10
 
 MAX_LLM_ARTICLES = 12
 
+---
 Кнопки под обычным дайджестом:
 
 ```text
